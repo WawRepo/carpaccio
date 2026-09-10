@@ -117,6 +117,16 @@ main { padding: 16px 20px 60px; }
   border-radius: 8px;
 }
 table { border-collapse: collapse; width: 100%; }
+
+/* The description is the column this whole tool exists to fill in, and it was
+   the narrowest thing on the page: a name like
+   "home-basement-iot_brother_printer" showed as "home-basement-iot_broth" and
+   the rest was only reachable by clicking into the field. Give it real room —
+   the browser hands leftover width to the widest min-width, so this is the
+   only lever needed. Found by screenshotting the live page, not by reading
+   the markup, which is the only way a clipped column is ever visible. */
+.devices th:first-child, .devices td:first-child { min-width: 260px; }
+.devices td:first-child input[type="text"] { min-width: 240px; }
 thead th {
   position: sticky;
   top: 0;

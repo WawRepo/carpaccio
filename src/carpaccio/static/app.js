@@ -140,7 +140,7 @@ function renderVlan(vlan) {
 
   main.append(
     el("div", { class: "table-wrap" },
-      el("table", {},
+      el("table", { class: "devices" },
         el("thead", {},
           el("tr", {},
             ...["Description", "IP", "Assignment", "MAC", "Random MAC?", "Hostname", "Link", "Active", "Notes", ""]
