@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>cARPaccio</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>c<span class="arp">ARP</span>accio</h1>
+    <p class="tagline">every VLAN, every address, written down</p>
+    <div class="actions">
+      <span id="status" class="status"></span>
+      <button id="save" class="primary">Save</button>
+    </div>
+  </header>
+  <div id="banner" class="banner hidden"></div>
+  <nav id="tabs"></nav>
+  <main id="content"></main>
+  <script id="document-data" type="application/json">{{ document_json | safe }}</script>
+  <script>window.CARPACCIO_VERSION = {{ version | tojson }};</script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
