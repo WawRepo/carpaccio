@@ -5,7 +5,8 @@
 
 let doc = JSON.parse(document.getElementById("document-data").textContent);
 let version = window.CARPACCIO_VERSION;
-let activeTab = null;
+// The active tab lives in the URL hash so a tab can be linked or reloaded.
+let activeTab = decodeURIComponent(window.location.hash.slice(1)) || null;
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -106,6 +107,7 @@ function render() {
   );
   const main = $("#content");
   main.replaceChildren();
+  if (activeTab) window.history.replaceState(null, "", "#" + encodeURIComponent(activeTab));
   const tab = tabs.find((t) => t.id === activeTab);
   if (tab) tab.render();
   else main.append(el("div", { class: "empty" }, "Empty document - run carpaccio-import or add a VLAN in DHCP ranges."));
@@ -230,7 +232,7 @@ function renderDhcp() {
 
 function firstMatch(src, dst) {
   for (const r of doc.firewall_rules) {
-    if (!r.enabled) continue;
+    if (r.enabled === false) continue; // absent = enabled, matching the schema's optional field
     if ((r.src === src || r.src === "any") && (r.dst === dst || r.dst === "any")) return r;
   }
   return null;
@@ -305,7 +307,7 @@ function ruleRow(r, names) {
   tr.append(textCell(r, "protocol"));
   tr.append(textCell(r, "ports", { mono: true }));
   tr.append(el("td", {}, el("input", {
-    type: "checkbox", checked: !!r.enabled,
+    type: "checkbox", checked: r.enabled !== false,
     onchange: (e) => { r.enabled = e.target.checked; render(); },
   })));
   tr.append(textCell(r, "description"));

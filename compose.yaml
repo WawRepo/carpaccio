@@ -45,7 +45,9 @@ services:
       CARPACCIO_S3_BUCKET: carpaccio
       CARPACCIO_S3_KEY: network.json
     ports:
-      - "8000:8000"
+      # Host port is overridable for machines where 8000 is taken:
+      # CARPACCIO_PORT=8300 docker compose up
+      - "${CARPACCIO_PORT:-8000}:8000"
 
 volumes:
   minio-data:

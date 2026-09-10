@@ -107,11 +107,19 @@ main { padding: 16px 20px 60px; }
 .vlan-summary .k { color: var(--muted); margin-right: 6px; }
 .vlan-summary .v { font-family: var(--mono); }
 
-.table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+/* The wrap is the scroll container (both axes), so the sticky header pins
+   to ITS top - sticky against page scroll cannot work inside an overflow
+   container. */
+.table-wrap {
+  overflow: auto;
+  max-height: calc(100vh - 250px);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
 table { border-collapse: collapse; width: 100%; }
 thead th {
   position: sticky;
-  top: 41px; /* below the sticky tab bar */
+  top: 0;
   background: var(--panel-2);
   color: var(--muted);
   font-weight: 600;
