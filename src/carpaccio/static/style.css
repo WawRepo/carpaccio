@@ -202,6 +202,10 @@ h2:first-child { margin-top: 0; }
 .matrix th { background: var(--panel-2); color: var(--muted); font-weight: 600; }
 .matrix th.axis { color: var(--text); }
 .matrix td { min-width: 110px; cursor: pointer; font-family: var(--mono); font-size: 12.5px; }
+/* An isolated source is not clickable: there is no rule to add, because the
+   block is not a rule. Making it look like the others would invite a click
+   that cannot do anything. */
+.matrix td.isolated { cursor: default; font-weight: 600; }
 .matrix td.self { background: #141920; color: #3a4454; cursor: default; }
 .matrix td.allow { background: rgba(63, 185, 111, 0.14); color: var(--green); }
 .matrix td.drop { background: rgba(224, 92, 92, 0.14); color: var(--red); }

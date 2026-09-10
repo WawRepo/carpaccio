@@ -127,3 +127,23 @@ def test_merge_into_empty_document(unifi_raw):
     merged = merge(empty_document(), parse(unifi_raw))
     assert validation_errors(merged) == []
     assert len(merged["devices"]) == 87
+
+
+def test_network_isolation_is_imported(unifi_raw):
+    """Isolation is separation that is NOT a firewall rule, and missing it is the
+    worst thing this tool can get wrong.
+
+    Every rule list on the real network is empty — rest/firewallrule,
+    rest/firewallgroup, v2 firewall-policies, firewall/zone, trafficrules — and
+    yet iot and guest genuinely cannot reach home, because UniFi's per-network
+    "Network Isolation" switch is on. A rules-only audit reports that as "nothing
+    separates these VLANs", which invites someone to go and build a wall that is
+    already standing. Assert the flag survives the import so it cannot regress.
+    """
+    doc = parse(unifi_raw)
+    by_name = {v["name"]: v for v in doc["vlans"]}
+    assert by_name["iot"]["isolated"] is True
+    assert by_name["guest"]["isolated"] is True
+    # home is the network the other two are isolated FROM; it is not isolated
+    # itself, and a missing flag must read as False rather than None.
+    assert by_name["home"]["isolated"] is False

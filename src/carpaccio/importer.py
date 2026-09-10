@@ -88,6 +88,16 @@ def parse(raw: dict) -> dict:
                 # vlan_enabled False = the untagged/native LAN -> null tag.
                 "vlan_id": n.get("vlan") if n.get("vlan_enabled") else None,
                 "subnet": n.get("ip_subnet", ""),
+                # THE SEPARATION THAT IS NOT A FIREWALL RULE. UniFi's
+                # "Network Isolation" switch blocks this network from reaching
+                # every other local network, and it appears in NO rule list --
+                # rest/firewallrule, rest/firewallgroup, v2 firewall-policies,
+                # firewall/zone and trafficrules were all empty on a network
+                # where iot and guest are, in fact, isolated. Miss this field
+                # and the tool confidently reports segmentation that does not
+                # exist as missing, which is the most damaging thing it could
+                # possibly get wrong.
+                "isolated": bool(n.get("network_isolation_enabled")),
                 "dhcp": {
                     "enabled": bool(n.get("dhcpd_enabled")),
                     "start": n.get("dhcpd_start", ""),

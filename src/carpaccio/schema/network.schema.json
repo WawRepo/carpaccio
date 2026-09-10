@@ -4,20 +4,43 @@
   "title": "cARPaccio network document, schema version 1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "wans", "vlans", "devices", "infrastructure", "firewall_rules"],
+  "required": [
+    "schema_version",
+    "wans",
+    "vlans",
+    "devices",
+    "infrastructure",
+    "firewall_rules"
+  ],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": {
+      "const": 1
+    },
     "wans": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name"],
+        "required": [
+          "name"
+        ],
         "properties": {
-          "name": { "type": "string", "minLength": 1 },
-          "wan_type": { "type": "string" },
-          "failover_priority": { "type": ["integer", "null"] },
-          "notes": { "type": "string" }
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "wan_type": {
+            "type": "string"
+          },
+          "failover_priority": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "notes": {
+            "type": "string"
+          }
         }
       }
     },
@@ -26,11 +49,21 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "vlan_id", "subnet"],
+        "required": [
+          "name",
+          "vlan_id",
+          "subnet"
+        ],
         "properties": {
-          "name": { "type": "string", "minLength": 1 },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
           "vlan_id": {
-            "type": ["integer", "null"],
+            "type": [
+              "integer",
+              "null"
+            ],
             "minimum": 1,
             "maximum": 4094,
             "description": "null means the untagged/native LAN"
@@ -43,14 +76,36 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
-              "enabled": { "type": "boolean" },
-              "start": { "type": "string" },
-              "stop": { "type": "string" },
-              "lease_seconds": { "type": ["integer", "null"] },
-              "dns": { "type": "array", "items": { "type": "string" } }
+              "enabled": {
+                "type": "boolean"
+              },
+              "start": {
+                "type": "string"
+              },
+              "stop": {
+                "type": "string"
+              },
+              "lease_seconds": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "dns": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
             }
           },
-          "notes": { "type": "string" }
+          "notes": {
+            "type": "string"
+          },
+          "isolated": {
+            "type": "boolean",
+            "description": "UniFi's per-network 'Network Isolation' switch. When true this network cannot reach ANY other local network, and the block is enforced by the gateway without appearing in any firewall rule list \u2014 which is exactly why a rules-only audit reports 'nothing separates these VLANs' and is wrong. Read from network_isolation_enabled."
+          }
         }
       }
     },
@@ -59,27 +114,61 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["mac", "assignment"],
+        "required": [
+          "mac",
+          "assignment"
+        ],
         "properties": {
           "mac": {
             "type": "string",
             "pattern": "^[0-9a-f]{2}(:[0-9a-f]{2}){5}$",
             "description": "lowercase colon-separated; the merge key"
           },
-          "name": { "type": "string" },
-          "hostname": { "type": "string" },
-          "ip": { "type": "string" },
-          "vlan": { "type": "string", "description": "name of the VLAN the device lives on" },
+          "name": {
+            "type": "string"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "ip": {
+            "type": "string"
+          },
+          "vlan": {
+            "type": "string",
+            "description": "name of the VLAN the device lives on"
+          },
           "assignment": {
-            "enum": ["reservation", "static", "dhcp"],
+            "enum": [
+              "reservation",
+              "static",
+              "dhcp"
+            ],
             "description": "reservation = DHCP reservation known to the controller; static = configured on the host itself, invisible to any API; dhcp = dynamic lease"
           },
-          "wired": { "type": "boolean" },
-          "active": { "type": "boolean" },
-          "oui": { "type": "string" },
-          "last_seen": { "type": ["integer", "null"] },
-          "notes": { "type": "string" },
-          "source": { "enum": ["unifi", "manual"] }
+          "wired": {
+            "type": "boolean"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "oui": {
+            "type": "string"
+          },
+          "last_seen": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "notes": {
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "unifi",
+              "manual"
+            ]
+          }
         }
       }
     },
@@ -88,14 +177,31 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["mac", "name"],
+        "required": [
+          "mac",
+          "name"
+        ],
         "properties": {
-          "mac": { "type": "string", "pattern": "^[0-9a-f]{2}(:[0-9a-f]{2}){5}$" },
-          "name": { "type": "string" },
-          "model": { "type": "string" },
-          "kind": { "type": "string", "description": "uap / usw / udm / uacc as UniFi reports it" },
-          "ip": { "type": "string" },
-          "notes": { "type": "string" }
+          "mac": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{2}(:[0-9a-f]{2}){5}$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "uap / usw / udm / uacc as UniFi reports it"
+          },
+          "ip": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          }
         }
       }
     },
@@ -104,17 +210,49 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "action", "src", "dst"],
+        "required": [
+          "name",
+          "action",
+          "src",
+          "dst"
+        ],
         "properties": {
-          "id": { "type": "string" },
-          "name": { "type": "string", "minLength": 1 },
-          "action": { "enum": ["allow", "drop", "reject"] },
-          "src": { "type": "string", "description": "VLAN name, or 'any'" },
-          "dst": { "type": "string", "description": "VLAN name, or 'any'" },
-          "protocol": { "type": "string", "description": "tcp / udp / icmp / any" },
-          "ports": { "type": "string", "description": "e.g. '443' or '8000-8100', empty = all" },
-          "enabled": { "type": "boolean" },
-          "description": { "type": "string" }
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "action": {
+            "enum": [
+              "allow",
+              "drop",
+              "reject"
+            ]
+          },
+          "src": {
+            "type": "string",
+            "description": "VLAN name, or 'any'"
+          },
+          "dst": {
+            "type": "string",
+            "description": "VLAN name, or 'any'"
+          },
+          "protocol": {
+            "type": "string",
+            "description": "tcp / udp / icmp / any"
+          },
+          "ports": {
+            "type": "string",
+            "description": "e.g. '443' or '8000-8100', empty = all"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": "string"
+          }
         }
       }
     }

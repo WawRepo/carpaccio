@@ -128,6 +128,12 @@ function renderVlan(vlan) {
       summaryItem("802.1q", vlan.vlan_id === null || vlan.vlan_id === undefined ? "untagged" : String(vlan.vlan_id)),
       summaryItem("dhcp", dhcp.enabled ? `${dhcp.start} – ${dhcp.stop}` : "off"),
       summaryItem("dns", (dhcp.dns || []).join(", ") || "—"),
+      // Say it on the VLAN's own tab too, not only in the firewall matrix.
+      // Whether this network can talk to the others is the first thing anyone
+      // asks about a segment, and it is invisible everywhere else in UniFi.
+      summaryItem("isolation", vlan.isolated
+        ? "ON — cannot reach other local networks"
+        : "off — can reach other local networks"),
     ),
   );
 
@@ -251,6 +257,23 @@ function renderFirewall() {
     const tr = el("tr", {}, el("th", {}, src));
     for (const dst of names) {
       if (src === dst) { tr.append(el("td", { class: "self" }, "·")); continue; }
+      // ISOLATION IS CHECKED FIRST, and it is not a rule. UniFi's per-network
+      // "Network Isolation" switch blocks a network from reaching every other
+      // local network, and it appears in no rule list at all. Before this, the
+      // matrix showed "no rule" for iot → home on a network where iot is in
+      // fact isolated: the tool reported real segmentation as missing, which
+      // is the worst answer it could give, because it invites someone to
+      // "fix" a wall that is already there.
+      const srcVlan = doc.vlans.find((v) => v.name === src);
+      if (srcVlan && srcVlan.isolated) {
+        tr.append(el("td", {
+          class: "drop isolated",
+          title: `${src} has UniFi Network Isolation on: it cannot reach any `
+               + `other local network. Enforced by the gateway, not by a rule, `
+               + `so it appears in no rule list.`,
+        }, "isolated"));
+        continue;
+      }
       const rule = firstMatch(src, dst);
       const cls = rule ? rule.action : "none";
       tr.append(el("td", {
@@ -263,9 +286,15 @@ function renderFirewall() {
   }
   main.append(el("div", { class: "table-wrap", style: "display:inline-block" }, matrix));
   main.append(el("div", { class: "matrix-legend" },
+    el("b", {}, "isolated"),
+    " = UniFi Network Isolation is on for that source network. It cannot reach any "
+    + "other local network, and this is enforced by the gateway rather than by a "
+    + "rule — so it shows up in no rule list, and a rules-only audit will wrongly "
+    + "report the segment as wide open. ",
+    el("br", {}),
     "“no rule” means whatever the router defaults to - which on most UniFi setups is ",
     el("span", { class: "mono" }, "allow"),
-    ". An empty matrix is the problem, not the goal. Click a cell to add a rule for that pair."));
+    ". Click a cell to add a rule for that pair."));
 
   main.append(el("h2", {}, "Rules (evaluated top-down)"));
   const tbody = el("tbody");
