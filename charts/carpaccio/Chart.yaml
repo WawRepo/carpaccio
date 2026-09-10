@@ -1,0 +1,6 @@
+apiVersion: v2
+name: carpaccio
+description: cARPaccio - every VLAN, every address, written down
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

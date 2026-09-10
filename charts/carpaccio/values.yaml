@@ -1,0 +1,41 @@
+image:
+  repository: ghcr.io/example/carpaccio
+  tag: ""            # defaults to the chart appVersion
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+# The pod is stateless (all state lives in S3), so the chart declares no PVC
+# and no nodeSelector: it must stay free to schedule on any node, arm64 Pis
+# included.
+
+service:
+  port: 8000
+
+ingress:
+  enabled: true
+  className: traefik
+  host: carpaccio.example.lan
+  annotations:
+    gethomepage.dev/enabled: "true"
+    gethomepage.dev/name: "cARPaccio"
+    gethomepage.dev/group: "Infrastructure"
+    gethomepage.dev/description: "Every VLAN, every address, written down"
+  tls: []
+
+s3:
+  endpoint: http://minio.minio.svc.cluster.local:9000
+  bucket: carpaccio
+  key: network.json
+  # Name of an EXISTING Secret carrying the S3 credentials. Credentials are
+  # never written into values; create the Secret out of band (e.g. SOPS).
+  existingSecret: carpaccio-s3
+  accessKeyKey: access-key
+  secretKeyKey: secret-key
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 256Mi

@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "carpaccio.fullname" . }}
+  labels:
+    {{- include "carpaccio.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "carpaccio.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "carpaccio.selectorLabels" . | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: carpaccio
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: CARPACCIO_S3_ENDPOINT
+              value: {{ .Values.s3.endpoint | quote }}
+            - name: CARPACCIO_S3_BUCKET
+              value: {{ .Values.s3.bucket | quote }}
+            - name: CARPACCIO_S3_KEY
+              value: {{ .Values.s3.key | quote }}
+            - name: CARPACCIO_S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.s3.existingSecret | quote }}
+                  key: {{ .Values.s3.accessKeyKey | quote }}
+            - name: CARPACCIO_S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.s3.existingSecret | quote }}
+                  key: {{ .Values.s3.secretKeyKey | quote }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
