@@ -93,19 +93,48 @@ nav .tab:hover { color: var(--text); }
 
 main { padding: 16px 20px 60px; }
 
-.vlan-summary {
-  display: flex;
-  gap: 26px;
-  flex-wrap: wrap;
+/* The VLAN details panel: one fact per LINE, labels and values in two
+   aligned columns. Vertical on purpose - the old single-line bar packed six
+   facts into one string and was unreadable. Compact on purpose too: it sits
+   above the device table and must not push it off the screen. */
+.vlan-details {
+  display: grid;
+  grid-template-columns: max-content minmax(240px, 480px);
+  gap: 3px 18px;
+  align-items: center;
   padding: 10px 14px;
   margin-bottom: 14px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 13px;
+  width: fit-content;
 }
-.vlan-summary .k { color: var(--muted); margin-right: 6px; }
-.vlan-summary .v { font-family: var(--mono); }
+.vlan-details .k { color: var(--muted); text-align: right; }
+.vlan-details .v { font-family: var(--mono); display: flex; align-items: center; gap: 8px; }
+.vlan-details input[type="text"], .vlan-details select {
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: 1px dashed var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 2px 6px;
+  font-size: 12.5px;
+  font-family: var(--mono);
+  width: 100%;
+}
+.vlan-details input[type="text"]:hover { border-color: var(--border); }
+.vlan-details input[type="text"]:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--panel-2);
+}
+.vlan-details input.narrow { width: 80px; }
+.vlan-details input.range-bound { width: 130px; }
+.vlan-details .range { display: inline-flex; align-items: center; gap: 4px; }
+.vlan-details label.inline { display: inline-flex; align-items: center; gap: 6px; }
+.vlan-details .unit { color: var(--muted); font-size: 12px; }
+.vlan-details input[type="checkbox"] { accent-color: var(--accent); }
 
 /* The wrap is the scroll container (both axes), so the sticky header pins
    to ITS top - sticky against page scroll cannot work inside an overflow
@@ -229,3 +258,16 @@ td input[type="checkbox"] { accent-color: var(--accent); }
    still left it ambiguous whether the values were live or just styled. */
 .editable-hint { color: var(--muted); }
 .editable-hint b { color: var(--text); font-weight: 600; }
+
+/* the "+" tab that adds a VLAN: quieter than a real tab, it is a button */
+nav .tab.add-vlan {
+  padding: 8px 10px;
+  color: var(--muted);
+  font-weight: 700;
+}
+nav .tab.add-vlan:hover { color: var(--accent); }
+
+/* history tab */
+ul.changes { margin: 2px 0; padding-left: 18px; }
+ul.changes li { font-size: 12.5px; }
+td.dim { color: var(--muted); font-size: 11.5px; }

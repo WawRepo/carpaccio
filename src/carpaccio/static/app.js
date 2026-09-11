@@ -85,6 +85,7 @@ function tabList() {
   tabs.push({ id: "dhcp", label: "DHCP ranges", render: renderDhcp });
   tabs.push({ id: "firewall", label: "Firewall", count: doc.firewall_rules.length, render: renderFirewall });
   tabs.push({ id: "wans", label: "WANs & infra", render: renderWans });
+  tabs.push({ id: "history", label: "History", render: renderHistory });
   return tabs;
 }
 
@@ -92,25 +93,150 @@ function render() {
   const tabs = tabList();
   if (!tabs.some((t) => t.id === activeTab)) activeTab = tabs.length ? tabs[0].id : null;
   const nav = $("#tabs");
-  nav.replaceChildren(
-    ...tabs.map((t) =>
-      el(
-        "div",
-        {
-          class: "tab" + (t.id === activeTab ? " active" : ""),
-          onclick: () => { activeTab = t.id; render(); },
-        },
-        t.label,
-        t.count !== undefined ? el("span", { class: "count" }, String(t.count)) : null,
-      ),
+  const tabEls = tabs.map((t) =>
+    el(
+      "div",
+      {
+        class: "tab" + (t.id === activeTab ? " active" : ""),
+        onclick: () => { activeTab = t.id; render(); },
+      },
+      t.label,
+      t.count !== undefined ? el("span", { class: "count" }, String(t.count)) : null,
     ),
   );
+  // The "+" sits right after the VLAN tabs, because that is what it adds.
+  tabEls.splice(doc.vlans.length, 0, el("div", {
+    class: "tab add-vlan",
+    title: "Add a VLAN",
+    onclick: addVlan,
+  }, "+"));
+  nav.replaceChildren(...tabEls);
   const main = $("#content");
   main.replaceChildren();
   if (activeTab) window.history.replaceState(null, "", "#" + encodeURIComponent(activeTab));
   const tab = tabs.find((t) => t.id === activeTab);
   if (tab) tab.render();
-  else main.append(el("div", { class: "empty" }, "Empty document - run carpaccio-import or add a VLAN in DHCP ranges."));
+  else main.append(
+    el("div", { class: "empty" },
+      "Empty document - run carpaccio-import, or ",
+      el("button", { class: "small", onclick: addVlan }, "+ Add VLAN")));
+}
+
+/* ---------- VLAN field helpers (shared by the VLAN tab and DHCP ranges) ----
+
+   A VLAN's NAME is special: unifi rows are merged BY NAME on re-import, so
+   renaming one would not match the next import and would DUPLICATE the
+   segment instead of renaming it. Manual rows are never matched against an
+   import and rename freely - and the rename must chase every device that
+   references the VLAN by name, or they fall off every tab. */
+
+function isManualVlan(v) { return v.source === "manual"; }
+
+function vlanNameControl(v) {
+  if (!isManualVlan(v)) {
+    return el("span", {
+      title: "from UniFi: this name is how the VLAN is matched on re-import, "
+           + "so it cannot be edited here. Rename it on the controller.",
+    }, v.name, " ", el("span", { class: "pill stable" }, "unifi"));
+  }
+  return el("input", {
+    type: "text", value: v.name,
+    onchange: (e) => {
+      const newName = e.target.value.trim();
+      if (!newName || (newName !== v.name
+          && doc.vlans.some((x) => x !== v && x.name === newName))) {
+        e.target.value = v.name; // empty or duplicate names would corrupt the sheet
+        return;
+      }
+      if (newName === v.name) return;
+      for (const d of doc.devices) if (d.vlan === v.name) d.vlan = newName;
+      if (activeTab === "vlan:" + v.name) activeTab = "vlan:" + newName;
+      v.name = newName;
+      render();
+    },
+  });
+}
+
+function vlanIdInput(v) {
+  return el("input", {
+    type: "text", class: "narrow", value: v.vlan_id ?? "", placeholder: "untagged",
+    onchange: (e) => {
+      const n = parseInt(e.target.value, 10);
+      v.vlan_id = Number.isFinite(n) ? n : null; // empty / junk = the untagged LAN
+      e.target.value = v.vlan_id ?? "";
+    },
+  });
+}
+
+function subnetInput(v) {
+  return el("input", {
+    type: "text", value: v.subnet || "", placeholder: "192.168.9.0/24",
+    oninput: (e) => { v.subnet = e.target.value.trim(); },
+  });
+}
+
+function ensureDhcp(v) {
+  v.dhcp = v.dhcp || { enabled: false, start: "", stop: "", lease_seconds: null, dns: [] };
+  return v.dhcp;
+}
+
+function leaseInput(v) {
+  const dhcp = ensureDhcp(v);
+  return el("input", {
+    type: "text", class: "narrow", value: dhcp.lease_seconds ?? "", placeholder: "86400",
+    onchange: (e) => {
+      const n = parseInt(e.target.value, 10);
+      dhcp.lease_seconds = Number.isFinite(n) ? n : null;
+      e.target.value = dhcp.lease_seconds ?? "";
+    },
+  });
+}
+
+function dnsInput(v) {
+  const dhcp = ensureDhcp(v);
+  return el("input", {
+    type: "text", value: (dhcp.dns || []).join(", "), placeholder: "comma-separated",
+    onchange: (e) => {
+      dhcp.dns = e.target.value.split(",").map((x) => x.trim()).filter(Boolean);
+      e.target.value = dhcp.dns.join(", ");
+    },
+  });
+}
+
+function addVlan() {
+  let n = 1;
+  let name = "new-vlan";
+  while (doc.vlans.some((v) => v.name === name)) { n += 1; name = "new-vlan-" + n; }
+  // subnet starts EMPTY (the schema allows it): a segment being planned has
+  // no addressing yet, and the add button must never create a document that
+  // cannot be saved.
+  doc.vlans.push({
+    name, vlan_id: null, subnet: "", isolated: false,
+    dhcp: { enabled: false, start: "", stop: "", lease_seconds: null, dns: [] },
+    notes: "", source: "manual",
+  });
+  activeTab = "vlan:" + name;
+  render();
+}
+
+function deleteVlanGuarded(v) {
+  const still = doc.devices.filter((d) => d.vlan === v.name).length;
+  if (still > 0) {
+    // Refuse, loudly. Deleting the VLAN would orphan these rows off every
+    // tab - they would still exist in the document but be visible nowhere.
+    showBanner([
+      el("strong", {}, `Not deleted - ${still} device${still === 1 ? "" : "s"} still on `
+        + `"${v.name}".`),
+      el("div", {}, "Move them to another VLAN (or delete them) first; "
+        + "nothing is ever dropped silently."),
+    ]);
+    return;
+  }
+  if (!confirm(`Delete VLAN "${v.name}"? (It has no devices.)`)) return;
+  doc.vlans.splice(doc.vlans.indexOf(v), 1);
+  activeTab = null;
+  hideBanner();
+  render();
 }
 
 /* ---------- per-VLAN device sheet ---------- */
@@ -119,21 +245,51 @@ const ASSIGNMENTS = ["reservation", "static", "dhcp"];
 
 function renderVlan(vlan) {
   const main = $("#content");
-  const dhcp = vlan.dhcp || {};
+  const dhcp = ensureDhcp(vlan);
+
+  // One detail per LINE, labels and values in two aligned columns. The old
+  // single-line bar packed six facts into one string of prose and the eye
+  // had to parse it every time; a column of labels reads at a glance. It is
+  // also where the VLAN itself is edited now - grid layout in .vlan-details.
+  const detail = (label, ...value) => [
+    el("span", { class: "k" }, label),
+    el("span", { class: "v" }, ...value),
+  ];
   main.append(
     el(
       "div",
-      { class: "vlan-summary" },
-      summaryItem("subnet", vlan.subnet),
-      summaryItem("802.1q", vlan.vlan_id === null || vlan.vlan_id === undefined ? "untagged" : String(vlan.vlan_id)),
-      summaryItem("dhcp", dhcp.enabled ? `${dhcp.start} – ${dhcp.stop}` : "off"),
-      summaryItem("dns", (dhcp.dns || []).join(", ") || "—"),
+      { class: "vlan-details" },
+      ...detail("name", vlanNameControl(vlan)),
+      ...detail("802.1q", vlanIdInput(vlan)),
+      ...detail("subnet", subnetInput(vlan)),
+      ...detail("dhcp",
+        el("label", { class: "inline" },
+          el("input", {
+            type: "checkbox", checked: !!dhcp.enabled,
+            onchange: (e) => { dhcp.enabled = e.target.checked; },
+          }),
+          " enabled"),
+        el("span", { class: "range" },
+          rangeInput(dhcp, "start"), " – ", rangeInput(dhcp, "stop"))),
+      ...detail("lease", leaseInput(vlan), el("span", { class: "unit" }, "seconds")),
+      ...detail("dns", dnsInput(vlan)),
       // Say it on the VLAN's own tab too, not only in the firewall matrix.
       // Whether this network can talk to the others is the first thing anyone
       // asks about a segment, and it is invisible everywhere else in UniFi.
-      summaryItem("isolation", vlan.isolated
-        ? "ON — cannot reach other local networks"
-        : "off — can reach other local networks"),
+      ...detail("isolation",
+        el("label", { class: "inline" },
+          el("input", {
+            type: "checkbox", checked: !!vlan.isolated,
+            onchange: (e) => { vlan.isolated = e.target.checked; render(); },
+          }),
+          vlan.isolated
+            ? " ON — cannot reach other local networks"
+            : " off — can reach other local networks")),
+      ...detail("notes", notesInput(vlan)),
+      ...detail("", el("button", {
+        class: "small danger",
+        onclick: () => deleteVlanGuarded(vlan),
+      }, "Delete VLAN")),
     ),
   );
 
@@ -170,8 +326,18 @@ function renderVlan(vlan) {
   );
 }
 
-function summaryItem(k, v) {
-  return el("span", {}, el("span", { class: "k" }, k), el("span", { class: "v" }, v ?? ""));
+function rangeInput(dhcp, field) {
+  return el("input", {
+    type: "text", class: "mono range-bound", value: dhcp[field] ?? "", placeholder: "0.0.0.0",
+    oninput: (e) => { dhcp[field] = e.target.value.trim(); },
+  });
+}
+
+function notesInput(obj) {
+  return el("input", {
+    type: "text", class: "wide", value: obj.notes ?? "",
+    oninput: (e) => { obj.notes = e.target.value; },
+  });
 }
 
 function deviceRow(d) {
@@ -208,29 +374,39 @@ function renderDhcp() {
   const main = $("#content");
   const tbody = el("tbody");
   for (const v of doc.vlans) {
-    v.dhcp = v.dhcp || { enabled: false, start: "", stop: "", lease_seconds: null, dns: [] };
+    const dhcp = ensureDhcp(v);
     const tr = el("tr");
-    tr.append(el("td", {}, v.name));
-    tr.append(el("td", { class: "mono" }, v.vlan_id === null || v.vlan_id === undefined ? "untagged" : String(v.vlan_id)));
-    tr.append(el("td", { class: "mono" }, v.subnet));
+    tr.append(el("td", {}, vlanNameControl(v)));
+    tr.append(el("td", { class: "mono" }, vlanIdInput(v)));
+    tr.append(el("td", { class: "mono" }, subnetInput(v)));
     tr.append(el("td", {}, el("input", {
-      type: "checkbox", checked: !!v.dhcp.enabled,
-      onchange: (e) => { v.dhcp.enabled = e.target.checked; },
+      type: "checkbox", checked: !!dhcp.enabled,
+      onchange: (e) => { dhcp.enabled = e.target.checked; },
     })));
-    tr.append(textCell(v.dhcp, "start", { mono: true }));
-    tr.append(textCell(v.dhcp, "stop", { mono: true }));
-    tr.append(el("td", { class: "mono" }, v.dhcp.lease_seconds ? `${v.dhcp.lease_seconds}s` : "—"));
-    tr.append(el("td", { class: "mono" }, (v.dhcp.dns || []).join(", ")));
+    tr.append(el("td", { class: "mono" }, rangeInput(dhcp, "start")));
+    tr.append(el("td", { class: "mono" }, rangeInput(dhcp, "stop")));
+    tr.append(el("td", { class: "mono" }, leaseInput(v)));
+    tr.append(el("td", { class: "mono" }, dnsInput(v)));
     tr.append(textCell(v, "notes"));
+    tr.append(el("td", {}, el("button", {
+      class: "small danger",
+      onclick: () => deleteVlanGuarded(v),
+    }, "✕")));
     tbody.append(tr);
   }
   main.append(
     el("div", { class: "table-wrap" },
       el("table", {},
         el("thead", {}, el("tr", {},
-          ...["VLAN", "802.1q", "Subnet", "DHCP", "Start", "Stop", "Lease", "DNS", "Notes"]
+          ...["VLAN", "802.1q", "Subnet", "DHCP", "Start", "Stop", "Lease (s)", "DNS", "Notes", ""]
             .map((h) => el("th", {}, h)))),
         tbody)),
+    el("div", { class: "toolbar" },
+      el("button", { onclick: addVlan }, "+ Add VLAN"),
+      el("span", { class: "hint" },
+        "a UniFi VLAN's name is its merge key and stays read-only; everything else "
+        + "is editable. Hand-added VLANs rename freely and may leave the subnet "
+        + "empty while the segment is still being planned.")),
   );
 }
 
@@ -447,10 +623,88 @@ function renderWans() {
       + "only place it can exist.")));
 }
 
+/* ---------- history: the bucket's versions, made readable ---------- */
+
+function renderHistory() {
+  const main = $("#content");
+  main.append(el("div", { class: "empty", id: "history-loading" }, "loading history…"));
+  fetch("/api/history")
+    .then((r) => { if (!r.ok) throw new Error("history returned " + r.status); return r.json(); })
+    .then((body) => {
+      if (activeTab !== "history") return; // the user moved on mid-fetch
+      main.replaceChildren();
+      main.append(el("div", { class: "matrix-legend" },
+        "Every Save is a version in the S3 bucket (object versioning), and every entry "
+        + "below is recoverable. Restoring writes the old content as a ",
+        el("b", {}, "new"), " version — history is never deleted."));
+      const tbody = el("tbody");
+      for (const v of body.versions) {
+        const tr = el("tr");
+        tr.append(el("td", { class: "mono" }, new Date(v.last_modified).toLocaleString()));
+        tr.append(el("td", {},
+          el("ul", { class: "changes" }, ...v.changes.map((c) => el("li", {}, c)))));
+        tr.append(el("td", { class: "mono" }, (v.size / 1024).toFixed(1) + " KB"));
+        tr.append(el("td", { class: "mono dim" }, v.version_id.slice(0, 8)));
+        tr.append(el("td", {}, v.is_latest
+          ? el("span", { class: "pill res" }, "current")
+          : el("button", {
+              class: "small",
+              onclick: () => restoreVersion(v.version_id),
+            }, "Restore")));
+        tbody.append(tr);
+      }
+      main.append(el("div", { class: "table-wrap" },
+        el("table", {},
+          el("thead", {}, el("tr", {},
+            ...["When", "What changed vs the previous version", "Size", "Version", ""]
+              .map((h) => el("th", {}, h)))),
+          tbody)));
+    })
+    .catch((err) => {
+      if (activeTab !== "history") return;
+      main.replaceChildren(el("div", { class: "empty" }, "could not load history: " + err.message));
+    });
+}
+
+async function restoreVersion(versionId) {
+  if (!confirm("Restore this version?\n\nIt will be written as a NEW version through the "
+      + "normal save path - nothing in the history is deleted. Unsaved edits on this "
+      + "page are discarded.")) return;
+  setStatus("restoring…");
+  const oldResp = await fetch("/api/network?version=" + encodeURIComponent(versionId));
+  if (!oldResp.ok) { setStatus("restore failed: " + oldResp.status, "err"); return; }
+  const historical = await oldResp.json();
+  // The restore goes through the SAME optimistic lock as any save: read the
+  // current token, write against it, surface a 409 like any other conflict.
+  const current = await (await fetch("/api/network")).json();
+  const resp = await fetch("/api/network", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ version: current.version, document: historical.document }),
+  });
+  if (resp.ok) {
+    const body = await resp.json();
+    doc = historical.document;
+    version = body.version;
+    setStatus("restored", "ok");
+    hideBanner();
+    render();
+    return;
+  }
+  const body = await resp.json().catch(() => ({}));
+  setStatus("restore failed", "err");
+  showBanner([
+    el("strong", {}, "Not restored (" + resp.status + "): "
+      + (body.detail || resp.statusText)),
+    el("ul", {}, ...(body.changes || body.errors || []).map((c) => el("li", {}, c))),
+  ]);
+}
+
 /* ---------- save / conflict handling ---------- */
 
 function normalise() {
   for (const d of doc.devices) d.mac = String(d.mac).trim().toLowerCase();
+  for (const i of doc.infrastructure) i.mac = String(i.mac).trim().toLowerCase();
 }
 
 async function save() {
