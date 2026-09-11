@@ -77,7 +77,13 @@ notes, names and `static` entries survive every re-import.
 | `UNIFI_PASSWORD` | — | Importer only: controller password |
 
 Credentials come from the environment only — never from flags, files in this
-repo, or defaults.
+repo, or defaults. Auth adds three more:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `CARPACCIO_BASIC_USER` / `CARPACCIO_BASIC_PASSWORD_HASH` | — | see [Security](#security); both unset = auth off |
+| `CARPACCIO_SESSION_SECRET` | — | signs the browser session cookie. Unset does not stop the boot: a random per-boot secret is used and a log warning says sessions will not survive a restart |
+| `CARPACCIO_COOKIE_SECURE` | auto | force the session cookie's `Secure` flag (`true`/`false`). Auto = on exactly when the request arrived over HTTPS (`X-Forwarded-Proto` when the proxy sets it, else the request scheme) |
 
 ## API
 
@@ -166,11 +172,21 @@ rewritten or deleted, and the History tab's Restore button does exactly this.
 
 ## Security
 
-**HTTP Basic auth on everything except `/healthz`.** Set two environment
-variables and it is on; leave either unset and it is **off**, which is fine on
-a laptop but never silent — `/healthz` reports `"auth": "off"` so an
-unauthenticated instance is a thing you can see rather than a thing you have
-to remember.
+**Two doors, one lock.** Scripts and agents authenticate with HTTP Basic;
+a browser gets a real login form at `/login` and carries a signed session
+cookie afterwards (`HttpOnly`, `SameSite=Lax`, one-week expiry, `Secure`
+whenever the request actually arrived over HTTPS). Both paths satisfy the
+same middleware, and the split is precise: an unauthenticated **API-shaped**
+request (path under `/api/`, or no `text/html` preference) always gets the
+401 JSON with `WWW-Authenticate` — never a redirect, so an agent can never
+mistake a login page for data. Only a browser navigation is sent to the form,
+and returns to where it was heading. Log out with the header button; agents
+on Basic are unaffected.
+
+Set two environment variables and auth is on; leave either unset and it is
+**off**, which is fine on a laptop but never silent — `/healthz` reports
+`"auth": "off"` so an unauthenticated instance is a thing you can see rather
+than a thing you have to remember.
 
 ```bash
 CARPACCIO_BASIC_USER=waw
@@ -184,10 +200,12 @@ after the colon) or:
 python -c 'import bcrypt,sys; print(bcrypt.hashpw(sys.argv[1].encode(), bcrypt.gensalt(12)).decode())' 'your password'
 ```
 
-**`/healthz` is deliberately open.** Kubernetes liveness and readiness probes
-send no credentials; behind auth they get 401, the pod is declared unhealthy,
-and a working app is restarted for ever. It exposes one boolean about whether
-object storage is reachable, and nothing else.
+**`/healthz`, `/login` and `/static/*` are deliberately open.** Kubernetes
+liveness and readiness probes send no credentials; behind auth they get 401,
+the pod is declared unhealthy, and a working app is restarted for ever.
+`/login` must be reachable or nobody can ever log in, and `/static/*` is the
+login page's own stylesheet — committed CSS/JS from a public repo, nothing to
+guard.
 
 **What Basic auth is and is not.** It is a password over TLS, appropriate for
 one household on one LAN. It is not per-user identity, it has no audit trail

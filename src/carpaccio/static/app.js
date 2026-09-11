@@ -885,6 +885,19 @@ async function save() {
       el("strong", {}, "Not saved - the document failed validation. Nothing was written."),
       el("ul", {}, ...(body.errors || []).map((c) => el("li", {}, c))),
     ]);
+  } else if (resp.status === 401) {
+    /* The session cookie expired mid-edit (they live a week). Deliberately a
+     * banner with a link, NOT an automatic redirect: navigating away here
+     * would throw away every unsaved edit on the page. Log in from another
+     * tab, come back, Save again - nothing is lost. */
+    setStatus("session expired", "err");
+    showBanner([
+      el("strong", {}, "Not saved - your session has expired."),
+      el("div", {},
+        el("a", { href: "/login", target: "_blank", rel: "noopener" },
+          "Log in again in a new tab"),
+        ", then come back and press Save - your edits are still here."),
+    ]);
   } else {
     setStatus("error " + resp.status, "err");
     showBanner([el("strong", {}, "Save failed: " + (body.detail || resp.statusText))]);

@@ -18,13 +18,24 @@ import json
 import uuid
 from importlib import resources
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import Body, FastAPI, Header, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .auth import BasicAuthMiddleware, credentials_from_env
+from .auth import (
+    SESSION_COOKIE,
+    SESSION_MAX_AGE,
+    BasicAuthMiddleware,
+    check,
+    cookie_secure,
+    credentials_from_env,
+    issue_session,
+    session_secret_from_env,
+    verify_session,
+)
 from .model import describe_diff, empty_document, load_schema, validation_errors
 from .netcalc import free_addresses
 from .store import StaleVersion, Store
@@ -38,7 +49,12 @@ def create_app(store: Store | None = None) -> FastAPI:
     app = FastAPI(title="cARPaccio", docs_url="/api/docs")
     app.state.store = store  # None means: build from env on first use
     app.state.credentials = credentials_from_env()
-    app.add_middleware(BasicAuthMiddleware, credentials=app.state.credentials)
+    app.state.session_secret = session_secret_from_env()
+    app.add_middleware(
+        BasicAuthMiddleware,
+        credentials=app.state.credentials,
+        session_secret=app.state.session_secret,
+    )
     templates = Jinja2Templates(directory=_PKG / "templates")
     app.mount("/static", StaticFiles(directory=_PKG / "static"), name="static")
 
@@ -66,10 +82,14 @@ def create_app(store: Store | None = None) -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request) -> Response:
         doc, version = get_store().load()
+        session_user = verify_session(
+            app.state.session_secret, request.cookies.get(SESSION_COOKIE, "")
+        )
         return templates.TemplateResponse(
             request,
             "index.html",
             {
+                "show_logout": session_user is not None,
                 # Escaping "</" keeps a malicious string value from closing
                 # the <script> block; Jinja must then NOT entity-escape it
                 # (entities are not decoded inside <script>), hence |safe in
@@ -78,6 +98,68 @@ def create_app(store: Store | None = None) -> FastAPI:
                 "version": version,
             },
         )
+
+    # ------------------------------------------------------------- sessions
+
+    def _safe_next(target: str) -> str:
+        # Only a local path may be redirected to: "next" comes from the URL,
+        # and an absolute or scheme-relative value ("https://evil", "//evil")
+        # would make the login form an open redirect.
+        if target.startswith("/") and not target.startswith("//"):
+            return target
+        return "/"
+
+    @app.get("/login", response_class=HTMLResponse)
+    def login_page(request: Request, next: str = "/", error: int = 0) -> Response:
+        if app.state.credentials is None:
+            # Auth is off: there is nothing to log in to.
+            return RedirectResponse("/", status_code=302)
+        return templates.TemplateResponse(
+            request, "login.html", {"next": _safe_next(next), "error": bool(error)}
+        )
+
+    @app.post("/login")
+    async def login_submit(request: Request) -> Response:
+        # request.form() rather than fastapi.Form: no pydantic ceremony for
+        # three fields. Starlette routes ALL form parsing (urlencoded too)
+        # through python-multipart these days, hence that dependency.
+        form = await request.form()
+        username = str(form.get("username", ""))
+        password = str(form.get("password", ""))
+        target = _safe_next(str(form.get("next", "/")))
+        if app.state.credentials is None:
+            return RedirectResponse("/", status_code=303)
+        if not check(username, password, *app.state.credentials):
+            # 303 back to the form; the page shows one message for both
+            # failure modes so the form is not a username oracle.
+            return RedirectResponse(
+                f"/login?error=1&next={quote(target, safe='/')}", status_code=303
+            )
+        response = RedirectResponse(target, status_code=303)
+        response.set_cookie(
+            SESSION_COOKIE,
+            issue_session(app.state.session_secret, username),
+            max_age=SESSION_MAX_AGE,
+            httponly=True,  # javascript never needs it, so javascript never sees it
+            samesite="lax",
+            secure=cookie_secure(request),  # see auth.cookie_secure for the trap
+            path="/",
+        )
+        return response
+
+    @app.post("/logout")
+    def logout(request: Request) -> Response:
+        response = RedirectResponse("/login", status_code=303)
+        # delete_cookie must repeat the attributes the cookie was set with,
+        # or some browsers keep the original.
+        response.delete_cookie(
+            SESSION_COOKIE,
+            httponly=True,
+            samesite="lax",
+            secure=cookie_secure(request),
+            path="/",
+        )
+        return response
 
     @app.get("/api/schema")
     def api_schema() -> dict:

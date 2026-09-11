@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>cARPaccio — log in</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>c<span class="arp">ARP</span>accio</h1>
+    <p class="tagline">every VLAN, every address, written down</p>
+  </header>
+  <main class="login-main">
+    <form class="login-card" method="post" action="/login">
+      <h2>Log in</h2>
+      {% if error %}
+      {# One message for both failure modes, on purpose: naming which half was
+         wrong turns the form into a username oracle. #}
+      <p class="login-error">Wrong username or password.</p>
+      {% endif %}
+      <input type="hidden" name="next" value="{{ next }}">
+      <label>Username
+        <input type="text" name="username" autocomplete="username" autofocus required>
+      </label>
+      <label>Password
+        <input type="password" name="password" autocomplete="current-password" required>
+      </label>
+      <button type="submit" class="primary">Log in</button>
+      <p class="hint">Scripts and agents keep using HTTP Basic — this form is the browser's door to the same lock.</p>
+    </form>
+  </main>
+</body>
+</html>

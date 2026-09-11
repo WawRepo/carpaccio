@@ -14,6 +14,11 @@
     <div class="actions">
       <span id="status" class="status"></span>
       <button id="save" class="primary">Save</button>
+      {% if show_logout %}
+      <form class="logout-form" method="post" action="/logout">
+        <button type="submit" title="end this browser session (agents on HTTP Basic are unaffected)">Log out</button>
+      </form>
+      {% endif %}
     </div>
   </header>
   <div id="banner" class="banner hidden"></div>

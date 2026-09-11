@@ -14,8 +14,14 @@ dependencies = [
     # The importer's HTTP client. Chosen over requests because it is already
     # the FastAPI-ecosystem default and its TestClient dependency ships anyway.
     "httpx>=0.27",
+    # Signs the session cookie (TimestampSigner). Chosen over hand-rolled
+    # hmac+timestamp: do not invent crypto.
+    "itsdangerous>=2.2.0",
     "jinja2>=3.1",
     "jsonschema>=4.23",
+    # Starlette routes ALL form parsing through this, urlencoded included -
+    # the login form does not work without it.
+    "python-multipart>=0.0.32",
     "uvicorn[standard]>=0.32",
 ]
 
