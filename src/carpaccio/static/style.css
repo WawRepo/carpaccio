@@ -271,3 +271,67 @@ nav .tab.add-vlan:hover { color: var(--accent); }
 ul.changes { margin: 2px 0; padding-left: 18px; }
 ul.changes li { font-size: 12.5px; }
 td.dim { color: var(--muted); font-size: 11.5px; }
+
+/* free-address panel: sits beside the VLAN details, same compact tone */
+.vlan-top { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+.free-panel {
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  max-width: 560px;
+}
+.free-title { font-weight: 600; margin-bottom: 4px; }
+.free-panel .hint { display: block; margin-bottom: 8px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; max-height: 180px; overflow-y: auto; }
+.chip {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(63, 185, 111, 0.10);
+  border: 1px solid rgba(63, 185, 111, 0.45);
+  color: var(--green);
+  cursor: pointer;
+}
+.chip:hover { border-color: var(--green); background: rgba(63, 185, 111, 0.2); }
+.chip.range { color: var(--accent); background: rgba(86, 168, 255, 0.08); border-color: rgba(86, 168, 255, 0.4); }
+.chip.range:hover { border-color: var(--accent); }
+.chip .chip-count { margin-left: 6px; color: var(--muted); }
+
+/* filter bar above the device table */
+.filter-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.filter-bar input.filter-q {
+  flex: 1 1 320px;
+  max-width: 460px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 6px 10px;
+  font-size: 13px;
+  font-family: var(--mono);
+}
+.filter-bar input.filter-q:focus { outline: none; border-color: var(--accent); }
+.filter-bar select {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 5px 8px;
+  font-size: 12.5px;
+}
+.filter-bar .count-hint { margin-left: auto; }
+
+/* sortable column headers */
+thead th.sortable { cursor: pointer; user-select: none; }
+thead th.sortable:hover { color: var(--text); }
+thead th.sorted { color: var(--accent); }

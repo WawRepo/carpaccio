@@ -40,3 +40,12 @@ def test_page_promises_what_it_delivers(client):
     body = client.get("/").text
     for needle in ('id="tabs"', 'id="content"', 'id="save"', 'id="document-data"'):
         assert needle in body, f"index.html no longer contains {needle}"
+
+
+def test_netcalc_loads_before_app_js(client):
+    """app.js reads the `netcalc` global at parse time; if the script order
+    ever flips, the page dies exactly like the missing-paren incident -
+    silently, with every gate green except this one."""
+    body = client.get("/").text
+    assert '"/static/netcalc.js"' in body
+    assert body.index("netcalc.js") < body.index("app.js")

@@ -10,18 +10,25 @@ let activeTab = decodeURIComponent(window.location.hash.slice(1)) || null;
 
 const $ = (sel) => document.querySelector(sel);
 
-/* Randomised = locally-administered bit of the first octet. Computed from the
- * address, never a vendor list. It decides whether a DHCP reservation
- * survives the device rejoining the network. */
-function macIsRandomised(mac) {
-  const first = parseInt(String(mac).split(":")[0], 16);
-  return Number.isFinite(first) && (first & 2) !== 0;
-}
+/* Address arithmetic, sorting and filter matching live in netcalc.js (loaded
+ * before this file, and mirrored in Python for the API + tests). */
+const macIsRandomised = netcalc.macIsRandomised;
 
-function ipSortKey(ip) {
-  const m = String(ip).match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-  if (!m) return Number.MAX_SAFE_INTEGER;
-  return ((+m[1] * 256 + +m[2]) * 256 + +m[3]) * 256 + +m[4];
+/* VIEW STATE - and only view state. Sort order, filters and which free-range
+ * chips are expanded NEVER touch `doc`: reordering doc.devices on a sort
+ * click would make Save write a new version and fill the History tab with
+ * "87 devices edited" entries that mean nothing. The stored document's order
+ * is whatever the importer/API produced; this object decides what the table
+ * SHOWS. Deliberately not persisted anywhere either.
+ */
+const view = {
+  sort: { key: "ip", dir: 1 }, // dir 1 = ascending, -1 = descending
+  filters: { q: "", assignment: "", rand: "", link: "", active: "" },
+  expanded: new Set(), // free-address ranges opened into individual chips
+};
+
+function clearFilters() {
+  view.filters = { q: "", assignment: "", rand: "", link: "", active: "" };
 }
 
 function el(tag, attrs = {}, ...children) {
@@ -255,8 +262,7 @@ function renderVlan(vlan) {
     el("span", { class: "k" }, label),
     el("span", { class: "v" }, ...value),
   ];
-  main.append(
-    el(
+  const detailsPanel = el(
       "div",
       { class: "vlan-details" },
       ...detail("name", vlanNameControl(vlan)),
@@ -290,23 +296,55 @@ function renderVlan(vlan) {
         class: "small danger",
         onclick: () => deleteVlanGuarded(vlan),
       }, "Delete VLAN")),
-    ),
   );
+  main.append(el("div", { class: "vlan-top" }, detailsPanel, freePanel(vlan)));
 
-  const devices = doc.devices
-    .filter((d) => d.vlan === vlan.name)
-    .sort((a, b) => ipSortKey(a.ip) - ipSortKey(b.ip));
-
+  // ---- the device sheet: filters and sort are VIEW state, never doc ------
   const tbody = el("tbody");
-  for (const d of devices) tbody.append(deviceRow(d));
+  const countEl = el("span", { class: "hint count-hint" });
+  const refreshRows = () => {
+    const all = doc.devices.filter((d) => d.vlan === vlan.name);
+    const rows = all
+      .filter((d) => netcalc.matchesFilters(d, view.filters))
+      // sort() on a COPY (filter() already copied): doc.devices keeps the
+      // stored order, or Save would write a meaningless new version.
+      .sort((a, b) => netcalc.compareDevices(a, b, view.sort.key, view.sort.dir));
+    tbody.replaceChildren(...rows.map(deviceRow));
+    countEl.textContent = rows.length === all.length
+      ? `${all.length} devices`
+      : `${rows.length} of ${all.length} devices match`;
+  };
+  refreshRows();
+
+  // Column headers sort on click; the arrow shows which one, which way.
+  // A sort click may full-render (nothing is mid-edit in a header), but the
+  // FILTER inputs above only call refreshRows(): a full render on every
+  // keystroke would steal focus from the box being typed in - the same bug
+  // class as the MAC-pill repaint, solved the same way.
+  const SORTABLE = [
+    ["Description", "name"], ["IP", "ip"], ["Assignment", "assignment"],
+    ["MAC", "mac"], ["Random MAC?", "rand"], ["Hostname", "hostname"],
+    ["Link", "wired"], ["Active", "active"], ["Notes", null], ["", null],
+  ];
+  const headRow = el("tr", {}, ...SORTABLE.map(([label, key]) => {
+    if (!key) return el("th", {}, label);
+    const active = view.sort.key === key;
+    return el("th", {
+      class: "sortable" + (active ? " sorted" : ""),
+      title: "click to sort" + (active ? ", again to reverse" : ""),
+      onclick: () => {
+        if (view.sort.key === key) view.sort.dir = -view.sort.dir;
+        else view.sort = { key, dir: 1 };
+        render();
+      },
+    }, label + (active ? (view.sort.dir === 1 ? " ▲" : " ▼") : ""));
+  }));
 
   main.append(
+    filterBar(refreshRows, countEl),
     el("div", { class: "table-wrap" },
       el("table", { class: "devices" },
-        el("thead", {},
-          el("tr", {},
-            ...["Description", "IP", "Assignment", "MAC", "Random MAC?", "Hostname", "Link", "Active", "Notes", ""]
-              .map((h) => el("th", {}, h)))),
+        el("thead", {}, headRow),
         tbody)),
     el("div", { class: "toolbar" },
       el("button", {
@@ -324,6 +362,105 @@ function renderVlan(vlan) {
       el("span", { class: "hint" },
         "static = configured on the host itself; the controller cannot see it, so write it down here.")),
   );
+}
+
+/* ---------- "which address can I actually hand out?" ----------------------
+   The question this whole batch serves. Free = usable in the subnet, OUTSIDE
+   the DHCP pool, not the gateway, not recorded on any device (any assignment
+   - a dhcp lease outside the pool is a stale lease, not an invitation) or
+   infrastructure. Computed live from `doc` by netcalc.js so the answer
+   tracks unsaved edits; the API serves the same answer for agents from
+   netcalc.py, and a test keeps the twins equal. */
+function freePanel(vlan) {
+  const taken = doc.devices.map((d) => d.ip || "")
+    .concat(doc.infrastructure.map((i) => i.ip || ""));
+  const ans = netcalc.freeAddresses(vlan.subnet, vlan.dhcp, taken);
+  const box = el("div", { class: "free-panel" });
+  box.append(el("div", { class: "free-title" }, "Free to reserve"));
+  if (ans.reason) {
+    box.append(el("div", { class: "hint" }, ans.reason));
+    return box;
+  }
+  box.append(el("div", { class: "hint" },
+    `${ans.free_count} address${ans.free_count === 1 ? "" : "es"} outside the DHCP pool`
+    + `${ans.pool ? ` (${ans.pool.start} – ${ans.pool.end})` : ""} and taken by nothing `
+    + "in this document. Click one to write it down as a reservation."));
+  const chips = el("div", { class: "chips" });
+  for (const r of ans.free_ranges) {
+    // A run of one is an address; click it. A longer run shows collapsed
+    // (60 chips nobody asked for are noise) and expands on click. The
+    // expansion key is the run's first address, so once an address inside
+    // it is taken the runs re-split and the expansion collapses - fine,
+    // the list just changed.
+    if (r.size === 1) {
+      chips.append(addressChip(vlan, r.start));
+    } else if (view.expanded.has(vlan.name + "|" + r.start)) {
+      const startInt = netcalc.parseIp(r.start);
+      for (let i = 0; i < r.size; i++) {
+        chips.append(addressChip(vlan, netcalc.formatIp(startInt + i)));
+      }
+    } else {
+      chips.append(el("button", {
+        class: "chip range",
+        title: r.size + " free addresses - click to expand",
+        onclick: () => { view.expanded.add(vlan.name + "|" + r.start); render(); },
+      }, `${r.start} – ${r.end}`, el("span", { class: "chip-count" }, String(r.size))));
+    }
+  }
+  box.append(chips);
+  return box;
+}
+
+function addressChip(vlan, ip) {
+  // The shortest path from "I see a free address" to "it is written down":
+  // one click creates the reservation row, pre-filled, sorted into place.
+  // The chip disappears on the re-render because the address is now taken.
+  return el("button", {
+    class: "chip",
+    title: "add a reservation row with this address",
+    onclick: () => {
+      doc.devices.push({
+        mac: "", name: "", hostname: "", ip, vlan: vlan.name,
+        assignment: "reservation", wired: true, active: false, oui: "",
+        last_seen: null, notes: "", source: "manual",
+      });
+      setStatus("added " + ip + " — fill in MAC and description, then Save", "ok");
+      render();
+    },
+  }, ip);
+}
+
+function filterBar(refreshRows, countEl) {
+  const filterSelect = (field, options) => {
+    const sel = el("select", {
+      onchange: (e) => { view.filters[field] = e.target.value; refreshRows(); },
+    });
+    for (const [value, label] of options) {
+      sel.append(el("option",
+        { value, ...(view.filters[field] === value ? { selected: "" } : {}) }, label));
+    }
+    return sel;
+  };
+  const bar = el("div", { class: "filter-bar" },
+    el("input", {
+      type: "text", class: "filter-q", value: view.filters.q,
+      placeholder: "filter: name / hostname / MAC, or an IP prefix like 192.168.1.2",
+      // refreshRows() only - a full render() here would rebuild this very
+      // input and steal focus on every keystroke.
+      oninput: (e) => { view.filters.q = e.target.value; refreshRows(); },
+    }),
+    filterSelect("assignment", [["", "assignment: any"], ["reservation", "reservation"],
+      ["static", "static"], ["dhcp", "dhcp"]]),
+    filterSelect("rand", [["", "MAC: any"], ["yes", "randomised"], ["no", "burned-in"]]),
+    filterSelect("link", [["", "link: any"], ["wired", "wired"], ["wifi", "wifi"]]),
+    filterSelect("active", [["", "active: any"], ["yes", "up"], ["no", "down"]]),
+    el("button", {
+      class: "small",
+      onclick: () => { clearFilters(); render(); }, // full render rebuilds the boxes empty
+    }, "clear filters"),
+    countEl,
+  );
+  return bar;
 }
 
 function rangeInput(dhcp, field) {
@@ -387,6 +524,15 @@ function renderDhcp() {
     tr.append(el("td", { class: "mono" }, rangeInput(dhcp, "stop")));
     tr.append(el("td", { class: "mono" }, leaseInput(v)));
     tr.append(el("td", { class: "mono" }, dnsInput(v)));
+    {
+      // The same free-address arithmetic as the VLAN tab's panel, as a count:
+      // this tab is where someone compares pools across VLANs.
+      const taken = doc.devices.map((d) => d.ip || "")
+        .concat(doc.infrastructure.map((i) => i.ip || ""));
+      const ans = netcalc.freeAddresses(v.subnet, v.dhcp, taken);
+      tr.append(el("td", { class: "mono", title: ans.reason || "outside the DHCP pool and unused" },
+        ans.reason ? "—" : String(ans.free_count)));
+    }
     tr.append(textCell(v, "notes"));
     tr.append(el("td", {}, el("button", {
       class: "small danger",
@@ -398,7 +544,7 @@ function renderDhcp() {
     el("div", { class: "table-wrap" },
       el("table", {},
         el("thead", {}, el("tr", {},
-          ...["VLAN", "802.1q", "Subnet", "DHCP", "Start", "Stop", "Lease (s)", "DNS", "Notes", ""]
+          ...["VLAN", "802.1q", "Subnet", "DHCP", "Start", "Stop", "Lease (s)", "DNS", "Free", "Notes", ""]
             .map((h) => el("th", {}, h)))),
         tbody)),
     el("div", { class: "toolbar" },
