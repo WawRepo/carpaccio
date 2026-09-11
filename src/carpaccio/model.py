@@ -50,18 +50,84 @@ def mac_is_randomised(mac: str) -> bool:
     return bool(int(mac.split(":")[0], 16) & 2)
 
 
-def summarise_changes(current: dict, submitted: dict) -> list[str]:
-    """What differs between the stored document and a rejected write.
+# What identifies an entry within each section, for diffing two documents.
+_SECTION_KEYS = {
+    "wans": "name",
+    "vlans": "name",
+    "devices": "mac",
+    "infrastructure": "mac",
+    "firewall_rules": "id",
+}
 
-    Returned in a 409 so the loser of a race sees WHAT moved underneath them
-    rather than a bare 'conflict'. Section-level granularity is deliberate:
-    the UI reloads the whole document anyway, this only has to point a human
-    at the right tab.
+
+def _entry_label(section: str, entry: dict) -> str:
+    """The name a human knows the entry by, falling back to its key."""
+    label = entry.get("name") or entry.get("hostname") or ""
+    return label or str(entry.get(_SECTION_KEYS[section], "?"))
+
+
+def _names(section: str, entries: list, limit: int = 3) -> str:
+    labels = [_entry_label(section, e) for e in entries[:limit]]
+    if len(entries) > limit:
+        labels.append(f"+{len(entries) - limit} more")
+    return ", ".join(labels)
+
+
+def describe_diff(old: dict, new: dict) -> list[str]:
+    """Human-readable summary of what changed between two documents.
+
+    One line per section that differs, e.g.
+    "devices: 2 added (printer, nas); 1 edited (pi4 [ip, notes])".
+    Serves both the 409 body (what moved underneath a stale writer) and the
+    History tab (what a stored version changed versus its predecessor) - one
+    diff function, so the two never drift apart. Each line starts with the
+    section's key verbatim, so a caller can route a change to the right tab.
+
+    An empty list means the documents are identical (schema_version aside).
     """
-    changes = []
-    for section in ("wans", "vlans", "devices", "infrastructure", "firewall_rules"):
-        cur = current.get(section, [])
-        sub = submitted.get(section, [])
-        if cur != sub:
-            changes.append(f"{section}: stored has {len(cur)} entries, your copy has {len(sub)}")
-    return changes or ["stored document differs from the version your edit was based on"]
+    lines = []
+    for section, key in _SECTION_KEYS.items():
+        old_list = old.get(section, [])
+        new_list = new.get(section, [])
+        if old_list == new_list:
+            continue
+        old_by = {e.get(key): e for e in old_list}
+        new_by = {e.get(key): e for e in new_list}
+        # Duplicate or missing keys make an entry-level diff a lie
+        # (dict-collapse would hide rows), so fall back to plain counts.
+        if len(old_by) != len(old_list) or len(new_by) != len(new_list):
+            lines.append(f"{section}: {len(old_list)} -> {len(new_list)} entries")
+            continue
+        added = [new_by[k] for k in new_by if k not in old_by]
+        removed = [old_by[k] for k in old_by if k not in new_by]
+        edited = [k for k in new_by if k in old_by and new_by[k] != old_by[k]]
+        parts = []
+        if added:
+            parts.append(f"{len(added)} added ({_names(section, added)})")
+        if removed:
+            parts.append(f"{len(removed)} removed ({_names(section, removed)})")
+        if edited:
+            if len(edited) <= 3:
+                bits = []
+                for k in edited:
+                    fields = [
+                        f
+                        for f in sorted(set(new_by[k]) | set(old_by[k]))
+                        if new_by[k].get(f) != old_by[k].get(f)
+                    ]
+                    bits.append(f"{_entry_label(section, new_by[k])} [{', '.join(fields)}]")
+                parts.append(f"{len(edited)} edited ({'; '.join(bits)})")
+            else:
+                parts.append(f"{len(edited)} edited")
+        if parts:
+            lines.append(f"{section}: " + "; ".join(parts))
+    return lines
+
+
+def summarise_changes(current: dict, submitted: dict) -> list[str]:
+    """The 409 body: what differs between the stored document and a rejected
+    write, so the loser of a race sees WHAT moved rather than a bare
+    'conflict'."""
+    return describe_diff(current, submitted) or [
+        "stored document differs from the version your edit was based on"
+    ]

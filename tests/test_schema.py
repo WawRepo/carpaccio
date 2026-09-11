@@ -64,3 +64,113 @@ def test_valid_full_entries():
         }
     )
     assert validation_errors(doc) == []
+
+
+def test_schema_endpoint_serves_the_full_schema(client):
+    """An agent can fetch this and validate before PUTting - the response is
+    the byte-identical schema the server itself validates with."""
+    from carpaccio.model import load_schema
+
+    assert client.get("/api/schema").json() == load_schema()
+
+
+def test_every_field_the_importer_writes_is_described(unifi_raw):
+    """Walk everything parse() emits and demand a schema property for it.
+
+    additionalProperties is false throughout, so an undescribed field would be
+    REFUSED at save time - this test moves that discovery from the first
+    import in production to the test run."""
+    from carpaccio.importer import parse
+    from carpaccio.model import load_schema
+
+    schema = load_schema()
+    doc = parse(unifi_raw)
+    for section, entries in doc.items():
+        if section == "schema_version":
+            continue
+        props = schema["properties"][section]["items"]["properties"]
+        for entry in entries:
+            for field in entry:
+                assert field in props, f"{section}[].{field} is not in the schema"
+            # one level deeper: the dhcp sub-object
+            if "dhcp" in entry:
+                dhcp_props = props["dhcp"]["properties"]
+                for field in entry["dhcp"]:
+                    assert field in dhcp_props, f"{section}[].dhcp.{field} is not in the schema"
+
+
+def test_every_row_the_ui_creates_is_valid():
+    """Mirrors of the exact objects app.js pushes on each '+ Add' button.
+
+    If a button creates a row the schema refuses, the page can build a
+    document that cannot be saved - a bad button. If one of these templates
+    drifts from app.js, this test lies; keep them in sync when editing the
+    frontend's add-buttons."""
+    doc = empty_document()
+    # + Add VLAN (addVlan in app.js): subnet deliberately empty
+    doc["vlans"].append(
+        {
+            "name": "new-vlan",
+            "vlan_id": None,
+            "subnet": "",
+            "isolated": False,
+            "dhcp": {"enabled": False, "start": "", "stop": "", "lease_seconds": None, "dns": []},
+            "notes": "",
+            "source": "manual",
+        }
+    )
+    # + Add device (renderVlan): mac empty until typed - normalise() lowercases
+    # but an empty mac must still be refused, so use a typed-in one here
+    doc["devices"].append(
+        {
+            "mac": "02:00:00:00:00:01",
+            "name": "",
+            "hostname": "",
+            "ip": "",
+            "vlan": "new-vlan",
+            "assignment": "static",
+            "wired": True,
+            "active": False,
+            "oui": "",
+            "last_seen": None,
+            "notes": "",
+            "source": "manual",
+        }
+    )
+    # + Add rule (addRule)
+    doc["firewall_rules"].append(
+        {
+            "id": "manual-1757500000000",
+            "name": "new-vlan to any",
+            "action": "drop",
+            "src": "new-vlan",
+            "dst": "any",
+            "protocol": "any",
+            "ports": "",
+            "enabled": True,
+            "description": "",
+        }
+    )
+    # + Add WAN (renderWans)
+    doc["wans"].append(
+        {
+            "name": "new uplink",
+            "wan_type": "",
+            "failover_priority": None,
+            "notes": "",
+            "source": "manual",
+        }
+    )
+    # + Add gear (renderWans)
+    doc["infrastructure"].append(
+        {
+            "name": "patch panel",
+            "unifi_name": "",
+            "model": "",
+            "kind": "",
+            "ip": "",
+            "mac": "02:00:00:00:00:02",
+            "notes": "",
+        }
+    )
+    assert validation_errors(doc) == []

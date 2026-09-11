@@ -92,6 +92,48 @@ class Store:
             )
             return resp["ETag"].strip('"')
 
+    def list_versions(self, limit: int = 30) -> list[dict]:
+        """Stored versions of the document, newest first.
+
+        The bucket's object versioning IS the history mechanism - the app
+        deliberately implements none of its own. This only surfaces what S3
+        already keeps: version id, timestamp, size. Delete markers are
+        skipped; restoring always writes a NEW version through save(), so
+        nothing here ever deletes or rewrites history.
+        """
+        resp = self._s3.list_object_versions(Bucket=self.bucket, Prefix=self.key)
+        versions = [
+            {
+                "version_id": v["VersionId"],
+                "last_modified": v["LastModified"].isoformat(),
+                "size": v["Size"],
+                "is_latest": bool(v.get("IsLatest")),
+            }
+            for v in resp.get("Versions", [])
+            if v["Key"] == self.key  # Prefix matches "network.json.bak" too
+        ]
+        # S3 (and MinIO, and moto) return versions newest-first per key.
+        # Deliberately NOT re-sorted here: several saves can land in the same
+        # second, and re-sorting on the timestamp would scramble exactly the
+        # ties the backend already has in the right order.
+        return versions[:limit]
+
+    def load_version(self, version_id: str) -> dict:
+        """One historical document. Raises KeyError for an unknown version id.
+
+        Deliberately returns no lock token: a historical read must never be
+        mistaken for the current version, and restoring goes through the
+        normal save() path with the CURRENT token.
+        """
+        try:
+            resp = self._s3.get_object(Bucket=self.bucket, Key=self.key, VersionId=version_id)
+        except ClientError as err:
+            code = err.response["Error"]["Code"]
+            if code in ("NoSuchVersion", "NoSuchKey", "InvalidArgument", "404"):
+                raise KeyError(version_id) from err
+            raise
+        return json.loads(resp["Body"].read())
+
     def healthy(self) -> bool:
         try:
             self._s3.head_bucket(Bucket=self.bucket)
