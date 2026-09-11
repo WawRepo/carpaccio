@@ -73,6 +73,7 @@ def parse(raw: dict) -> dict:
             "wan_type": n.get("wan_type", ""),
             "failover_priority": n.get("wan_failover_priority"),
             "notes": "",
+            "source": "unifi",
         }
         for n in networks
         if n.get("purpose") == "wan"
@@ -191,10 +192,12 @@ def merge(existing: dict, imported: dict) -> dict:
     """
     merged = {
         "schema_version": 1,
-        # No track_rename: wans are keyed BY name, so a rename would not match
-        # the next import and would duplicate the row rather than rename it.
-        # The UI keeps the WAN name read-only for exactly this reason.
-        "wans": _merge_by(existing["wans"], imported["wans"], "name"),
+        # No track_rename: unifi wans are keyed BY name, so a rename would not
+        # match the next import and would duplicate the row rather than rename
+        # it. The UI keeps a unifi WAN's name read-only for exactly this reason,
+        # and lets a MANUAL one be renamed freely — _merge_wans below never
+        # matches those against an import at all.
+        "wans": _merge_wans(existing["wans"], imported["wans"]),
         "vlans": _merge_by(existing["vlans"], imported["vlans"], "name"),
         "devices": [],
         "infrastructure": _merge_by(
@@ -231,6 +234,25 @@ def merge(existing: dict, imported: dict) -> dict:
         r for r in imported["firewall_rules"] if (r.get("id"), r["name"]) not in known_rules
     )
     return merged
+
+
+def _merge_wans(existing: list, imported: list) -> list:
+    """WAN uplinks, with hand-added ones held apart from the controller's.
+
+    A MANUAL uplink — a 5G dongle that is not plugged in yet, a second line
+    ordered but not delivered, an ISP account somebody wants written down — has
+    no counterpart on the controller and must never be matched against one.
+    Two reasons it gets its own path rather than going through _merge_by:
+
+      * _merge_by keys on `name`, and a freshly added row's name starts EMPTY.
+        Two blank names would collapse into one dict entry and silently eat a
+        row. Manual entries skip the dict entirely.
+      * a manual row is renameable precisely because nothing will ever try to
+        match it by name, which is the opposite of the rule for unifi rows.
+    """
+    manual = [w for w in existing if w.get("source") == "manual"]
+    from_controller = [w for w in existing if w.get("source") != "manual"]
+    return _merge_by(from_controller, imported, "name") + manual
 
 
 def _merge_by(existing: list, imported: list, key: str, *, track_rename: bool = False) -> list:

@@ -40,6 +40,13 @@
           },
           "notes": {
             "type": "string"
+          },
+          "source": {
+            "enum": [
+              "unifi",
+              "manual"
+            ],
+            "description": "Where this uplink came from. 'unifi' rows are merged BY NAME, so their name is the merge key and the UI keeps it read-only \u2014 renaming one would duplicate the row on the next import rather than rename it. 'manual' rows are typed in here, never matched against an import, and so are freely renameable."
           }
         }
       }

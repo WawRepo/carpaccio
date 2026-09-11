@@ -355,21 +355,55 @@ function renderWans() {
   const wbody = el("tbody");
   for (const w of doc.wans) {
     const tr = el("tr");
-    // NOT editable, and this is the one place that is deliberate. WANs are
-    // merged BY NAME — it is their key — so renaming one here would not match
-    // the next import and would silently duplicate the row instead of renaming
-    // it. Three uplinks named by their ISP need annotating, not renaming; use
-    // Notes. (Network gear below is keyed on MAC, so it renames safely.)
-    tr.append(el("td", {}, w.name));
-    tr.append(el("td", { class: "mono" }, w.wan_type || ""));
-    tr.append(el("td", { class: "mono" }, w.failover_priority != null ? String(w.failover_priority) : ""));
+    const manual = w.source === "manual";
+    // A UniFi uplink's name is its MERGE KEY, so renaming it here would not
+    // match the next import and would duplicate the row instead of renaming
+    // it — read-only, annotate with Notes instead. A hand-added one is never
+    // matched against an import, so it renames freely.
+    if (manual) {
+      tr.append(textCell(w, "name", { placeholder: "name this uplink" }));
+      tr.append(textCell(w, "wan_type", { mono: true, placeholder: "pppoe / dhcp / static" }));
+      tr.append(textCell(w, "failover_priority", { mono: true, placeholder: "4" }));
+    } else {
+      tr.append(el("td", { title: "from UniFi: this name is how the row is matched on "
+                                + "re-import, so it cannot be edited here. Use Notes." }, w.name));
+      tr.append(el("td", { class: "mono" }, w.wan_type || ""));
+      tr.append(el("td", { class: "mono" }, w.failover_priority != null ? String(w.failover_priority) : ""));
+    }
     tr.append(textCell(w, "notes"));
+    tr.append(el("td", {}, manual
+      ? el("button", {
+          class: "small danger",
+          onclick: () => { doc.wans.splice(doc.wans.indexOf(w), 1); render(); },
+        }, "✕")
+      : el("span", { class: "pill stable", title: "reported by the controller" }, "unifi")));
     wbody.append(tr);
   }
   main.append(el("div", { class: "table-wrap" },
     el("table", {},
-      el("thead", {}, el("tr", {}, ...["Name", "Type", "Failover priority", "Notes"].map((h) => el("th", {}, h)))),
+      el("thead", {}, el("tr", {},
+        ...["Name", "Type", "Failover priority", "Notes", ""].map((h) => el("th", {}, h)))),
       wbody)));
+  main.append(el("div", { class: "toolbar" },
+    el("button", {
+      class: "small",
+      onclick: () => {
+        // A default NAME, not an empty one: the schema requires a non-empty
+        // WAN name, so a blank row would make the whole document invalid and
+        // the next Save would come back 422 pointing at a field the user had
+        // not filled in yet. A button that creates an unsaveable document is
+        // a bad button. Rename it in place.
+        doc.wans.push({
+          name: "new uplink", wan_type: "", failover_priority: null,
+          notes: "", source: "manual",
+        });
+        render();
+      },
+    }, "+ Add WAN"),
+    el("span", { class: "hint" },
+      "for an uplink the controller does not know about — a 5G dongle not plugged "
+      + "in yet, a second line on order, an ISP account worth writing down. "
+      + "Hand-added uplinks are renameable; the controller's are not.")));
 
   main.append(el("h2", {}, "Network gear"));
   const ibody = el("tbody");

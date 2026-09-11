@@ -185,3 +185,48 @@ def test_untouched_infrastructure_name_tracks_the_controller(unifi_raw):
         i for i in merged["infrastructure"] if i["mac"] == incoming["infrastructure"][0]["mac"]
     )
     assert row["name"] == "renamed-in-unifi"
+
+
+def test_hand_added_wan_survives_reimport(unifi_raw):
+    """A manual uplink must not be matched against the controller, or erased by it.
+
+    The controller reports three WANs. A fourth typed in here -- a 5G dongle not
+    plugged in yet, a line on order -- has no counterpart to match, and the merge
+    keys on `name`, so a freshly added row whose name is still EMPTY would
+    collide with any other empty-named row if it went through the same path.
+    """
+    stored = parse(unifi_raw)
+    stored["wans"].append(
+        {
+            "name": "new uplink",
+            "wan_type": "",
+            "failover_priority": None,
+            "notes": "on order",
+            "source": "manual",
+        }
+    )
+    stored["wans"].append(
+        {
+            "name": "5g-backup",
+            "wan_type": "dhcp",
+            "failover_priority": 4,
+            "notes": "",
+            "source": "manual",
+        }
+    )
+
+    merged = merge(stored, parse(unifi_raw))
+
+    assert len(merged["wans"]) == 5, "3 from the controller + 2 hand-added"
+    manual = [w for w in merged["wans"] if w.get("source") == "manual"]
+    assert len(manual) == 2, "a second hand-added row must not be swallowed by the first"
+    assert {w["notes"] for w in manual} == {"on order", ""}
+    assert validation_errors(merged) == []
+
+
+def test_controller_wans_are_still_deduplicated(unifi_raw):
+    """The other half: importing twice must not double the controller's uplinks."""
+    stored = parse(unifi_raw)
+    merged = merge(stored, parse(unifi_raw))
+    from_controller = [w for w in merged["wans"] if w.get("source") != "manual"]
+    assert len(from_controller) == 3
