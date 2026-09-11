@@ -6,6 +6,9 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
 dependencies = [
+    # Password hashing for HTTP Basic. bcrypt directly rather than passlib:
+    # passlib is unmaintained and only wraps this for one algorithm.
+    "bcrypt>=4.2",
     "boto3>=1.35",
     "fastapi>=0.115",
     # The importer's HTTP client. Chosen over requests because it is already

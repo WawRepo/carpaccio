@@ -33,6 +33,16 @@ s3:
   accessKeyKey: access-key
   secretKeyKey: secret-key
 
+# HTTP Basic auth. Leave userKey/passwordHashKey unset and auth is OFF -- the
+# app says so in /healthz. The password is a BCRYPT HASH, never a password:
+#   htpasswd -nbBC 12 <user> <password>   (take the part after the colon)
+basicAuth:
+  # Name of an existing Secret holding the two keys below. Defaults to the
+  # same Secret as the S3 credentials so a small install needs only one.
+  existingSecret: carpaccio-s3
+  userKey: basic-user
+  passwordHashKey: basic-password-hash
+
 resources:
   requests:
     cpu: 50m

@@ -41,6 +41,25 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.s3.existingSecret | quote }}
                   key: {{ .Values.s3.secretKeyKey | quote }}
+            {{- if and .Values.basicAuth.userKey .Values.basicAuth.passwordHashKey }}
+            # optional: true on both, so a chart that declares auth against a
+            # Secret which does not yet carry the keys starts UNAUTHENTICATED
+            # rather than CrashLoopBackOff. /healthz reports auth: off, which
+            # is the signal to go and add them -- a pod that will not start
+            # tells you nothing about why.
+            - name: CARPACCIO_BASIC_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.basicAuth.existingSecret | quote }}
+                  key: {{ .Values.basicAuth.userKey | quote }}
+                  optional: true
+            - name: CARPACCIO_BASIC_PASSWORD_HASH
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.basicAuth.existingSecret | quote }}
+                  key: {{ .Values.basicAuth.passwordHashKey | quote }}
+                  optional: true
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz

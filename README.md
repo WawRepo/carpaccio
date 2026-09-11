@@ -165,10 +165,39 @@ rewritten or deleted, and the History tab's Restore button does exactly this.
 
 ## Security
 
-**cARPaccio has no authentication.** That is a deliberate v1 decision, not an
-oversight. Anyone who can reach the port can read and rewrite your network
-inventory. Keep it on the LAN (or behind your own reverse-proxy auth); do not
-expose it to the internet.
+**HTTP Basic auth on everything except `/healthz`.** Set two environment
+variables and it is on; leave either unset and it is **off**, which is fine on
+a laptop but never silent — `/healthz` reports `"auth": "off"` so an
+unauthenticated instance is a thing you can see rather than a thing you have
+to remember.
+
+```bash
+CARPACCIO_BASIC_USER=waw
+CARPACCIO_BASIC_PASSWORD_HASH='$2b$12$...'     # bcrypt, never a password
+```
+
+Generate the hash with `htpasswd -nbBC 12 <user> <password>` (take the part
+after the colon) or:
+
+```bash
+python -c 'import bcrypt,sys; print(bcrypt.hashpw(sys.argv[1].encode(), bcrypt.gensalt(12)).decode())' 'your password'
+```
+
+**`/healthz` is deliberately open.** Kubernetes liveness and readiness probes
+send no credentials; behind auth they get 401, the pod is declared unhealthy,
+and a working app is restarted for ever. It exposes one boolean about whether
+object storage is reachable, and nothing else.
+
+**What Basic auth is and is not.** It is a password over TLS, appropriate for
+one household on one LAN. It is not per-user identity, it has no audit trail
+beyond the change history, and every caller shares one credential — including
+any agent using the API. Do not put this on the public internet and consider
+the password sufficient.
+
+**The fixtures in this repo are synthetic.** `tests/fixtures/sanitise.py`
+generates them; no real MAC, address or device name from anyone's network is
+committed here. The real data lives only in object storage.
+
 
 ## Development
 

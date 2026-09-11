@@ -1,7 +1,8 @@
 """The FastAPI app: the sheet UI plus a small JSON API.
 
-NO AUTHENTICATION in v1, by explicit decision - this stays on the LAN.
-See the Security section of the README.
+HTTP Basic auth on everything except /healthz - see auth.py for why it is
+middleware rather than a per-route dependency, and why the health check has to
+stay open. With no credential configured auth is OFF and /healthz says so.
 
 The API contract is the whole document: GET /api/network hands out a version
 token, PUT /api/network must present it, a stale write is refused with 409.
@@ -23,6 +24,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from .auth import BasicAuthMiddleware, credentials_from_env
 from .model import describe_diff, empty_document, load_schema, validation_errors
 from .store import StaleVersion, Store
 
@@ -34,6 +36,8 @@ SECTIONS = ("wans", "vlans", "devices", "infrastructure", "firewall_rules")
 def create_app(store: Store | None = None) -> FastAPI:
     app = FastAPI(title="cARPaccio", docs_url="/api/docs")
     app.state.store = store  # None means: build from env on first use
+    app.state.credentials = credentials_from_env()
+    app.add_middleware(BasicAuthMiddleware, credentials=app.state.credentials)
     templates = Jinja2Templates(directory=_PKG / "templates")
     app.mount("/static", StaticFiles(directory=_PKG / "static"), name="static")
 
@@ -48,7 +52,15 @@ def create_app(store: Store | None = None) -> FastAPI:
     def healthz() -> dict:
         # Reports the S3 dependency but stays 200 while it is down: the pod is
         # alive and can say so, and restarting it would not fix MinIO.
-        return {"status": "ok", "s3": "up" if get_store().healthy() else "down"}
+        #
+        # `auth` is here so that "this instance is wide open" is a thing you can
+        # SEE rather than a thing you have to remember. Unauthenticated is a
+        # legitimate state on a laptop; being in it without knowing is not.
+        return {
+            "status": "ok",
+            "s3": "up" if get_store().healthy() else "down",
+            "auth": "on" if app.state.credentials else "off",
+        }
 
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request) -> Response:
