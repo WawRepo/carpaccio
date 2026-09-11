@@ -230,3 +230,54 @@ def test_controller_wans_are_still_deduplicated(unifi_raw):
     merged = merge(stored, parse(unifi_raw))
     from_controller = [w for w in merged["wans"] if w.get("source") != "manual"]
     assert len(from_controller) == 3
+
+
+def test_parse_marks_vlans_as_unifi(unifi_raw):
+    doc = parse(unifi_raw)
+    assert all(v["source"] == "unifi" for v in doc["vlans"])
+
+
+def test_hand_added_vlan_survives_reimport(unifi_raw):
+    """A manual VLAN has no controller counterpart and must never be matched
+    against one - including after a rename, which is the whole point of
+    keeping it out of the name-keyed merge."""
+    imported = parse(unifi_raw)
+    existing = copy.deepcopy(imported)
+    existing["vlans"].append(
+        {
+            "name": "cameras",
+            "vlan_id": 40,
+            "subnet": "",
+            "isolated": True,
+            "dhcp": {"enabled": False, "start": "", "stop": "", "lease_seconds": None, "dns": []},
+            "notes": "planned segment, not built yet",
+            "source": "manual",
+        }
+    )
+
+    merged = merge(existing, imported)
+    assert validation_errors(merged) == []
+    names = [v["name"] for v in merged["vlans"]]
+    assert "cameras" in names
+    assert len(names) == 4  # 3 from the controller + 1 manual, nothing duplicated
+
+    # Rename the manual VLAN and re-import again: still one row, new name.
+    renamed = copy.deepcopy(merged)
+    renamed["vlans"][-1]["name"] = "cctv"
+    merged2 = merge(renamed, parse(unifi_raw))
+    names2 = [v["name"] for v in merged2["vlans"]]
+    assert "cctv" in names2 and "cameras" not in names2
+    assert len(names2) == 4
+
+
+def test_vlan_without_source_is_treated_as_unifi(unifi_raw):
+    """A document stored before vlans[].source existed: its rows can only have
+    come from the controller, so they must merge by name, not duplicate."""
+    imported = parse(unifi_raw)
+    existing = copy.deepcopy(imported)
+    for v in existing["vlans"]:
+        v.pop("source", None)
+        v["notes"] = "kept"
+    merged = merge(existing, imported)
+    assert len(merged["vlans"]) == 3
+    assert all(v["notes"] == "kept" for v in merged["vlans"])

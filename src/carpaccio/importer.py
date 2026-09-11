@@ -111,6 +111,7 @@ def parse(raw: dict) -> dict:
                     ],
                 },
                 "notes": "",
+                "source": "unifi",
             }
         )
 
@@ -198,7 +199,7 @@ def merge(existing: dict, imported: dict) -> dict:
         # and lets a MANUAL one be renamed freely — _merge_wans below never
         # matches those against an import at all.
         "wans": _merge_wans(existing["wans"], imported["wans"]),
-        "vlans": _merge_by(existing["vlans"], imported["vlans"], "name"),
+        "vlans": _merge_vlans(existing["vlans"], imported["vlans"]),
         "devices": [],
         "infrastructure": _merge_by(
             existing["infrastructure"], imported["infrastructure"], "mac", track_rename=True
@@ -252,6 +253,30 @@ def _merge_wans(existing: list, imported: list) -> list:
     """
     manual = [w for w in existing if w.get("source") == "manual"]
     from_controller = [w for w in existing if w.get("source") != "manual"]
+    return _merge_by(from_controller, imported, "name") + manual
+
+
+def _merge_vlans(existing: list, imported: list) -> list:
+    """VLANs, same shape as _merge_wans and for the same reason.
+
+    VLANs are merged BY NAME, so a unifi VLAN's name is its merge key and the
+    UI keeps it read-only - renaming one here would not match the next import
+    and would DUPLICATE the segment rather than rename it. A MANUAL VLAN (a
+    segment being planned, or one on gear UniFi does not manage) never has a
+    controller counterpart: it skips the name-keyed dict entirely, which is
+    also what makes it safely renameable.
+
+    A row with no `source` predates the field and can only have come from the
+    controller (manual creation arrived together with the field), so absent
+    is read as unifi - the cautious side, since wrongly freezing a name is
+    harmless and wrongly duplicating a VLAN is not.
+
+    On unifi rows the controller wins field-wise (same as devices): subnet,
+    dhcp and isolation are ITS config, and stale hand-corrections should heal
+    on the next import. Only notes are the human's (via _merge_by).
+    """
+    manual = [v for v in existing if v.get("source") == "manual"]
+    from_controller = [v for v in existing if v.get("source") != "manual"]
     return _merge_by(from_controller, imported, "name") + manual
 
 

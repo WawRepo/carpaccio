@@ -76,8 +76,16 @@
             "description": "null means the untagged/native LAN"
           },
           "subnet": {
-            "type": "string",
-            "pattern": "^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}/\\d{1,2}$"
+            "anyOf": [
+              {
+                "const": ""
+              },
+              {
+                "type": "string",
+                "pattern": "^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}/\\d{1,2}$"
+              }
+            ],
+            "description": "CIDR, or empty while a hand-added VLAN's addressing is still undecided"
           },
           "dhcp": {
             "type": "object",
@@ -112,6 +120,13 @@
           "isolated": {
             "type": "boolean",
             "description": "UniFi's per-network 'Network Isolation' switch. When true this network cannot reach ANY other local network, and the block is enforced by the gateway without appearing in any firewall rule list \u2014 which is exactly why a rules-only audit reports 'nothing separates these VLANs' and is wrong. Read from network_isolation_enabled."
+          },
+          "source": {
+            "enum": [
+              "unifi",
+              "manual"
+            ],
+            "description": "Where this VLAN came from. Like WANs, 'unifi' VLANs are merged BY NAME on re-import, so their name is the merge key and must not be edited - renaming one would duplicate the row rather than rename it. 'manual' VLANs are typed in here, never matched against an import, and are freely renameable. Absent (documents stored before this field existed) is treated as 'unifi': the cautious reading, since freezing a name is harmless and duplicating a VLAN is not."
           }
         }
       }
