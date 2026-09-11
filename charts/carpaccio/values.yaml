@@ -42,6 +42,10 @@ basicAuth:
   existingSecret: carpaccio-s3
   userKey: basic-user
   passwordHashKey: basic-password-hash
+  # Signs the login session cookie. Unset and the app generates one per boot,
+  # logging a warning — sessions then die on every restart. Rotating this key
+  # logs everyone out at once, which is the only session revocation there is.
+  sessionSecretKey: session-secret
 
 resources:
   requests:

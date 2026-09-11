@@ -59,6 +59,14 @@ spec:
                   name: {{ .Values.basicAuth.existingSecret | quote }}
                   key: {{ .Values.basicAuth.passwordHashKey | quote }}
                   optional: true
+            {{- if .Values.basicAuth.sessionSecretKey }}
+            - name: CARPACCIO_SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.basicAuth.existingSecret | quote }}
+                  key: {{ .Values.basicAuth.sessionSecretKey | quote }}
+                  optional: true
+            {{- end }}
             {{- end }}
           livenessProbe:
             httpGet:
