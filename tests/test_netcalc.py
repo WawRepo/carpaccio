@@ -211,6 +211,15 @@ assert(n.matchesFilters(dev, {{...none, rand: "yes", link: "wifi", active: "yes"
 assert(!n.matchesFilters(dev, {{...none, rand: "no"}}));
 assert(!n.matchesFilters(dev, {{...none, assignment: "static"}}));
 assert(!n.matchesFilters(dev, {{...none, rand: "yes", link: "wired"}}));
+// an ENTIRELY empty row is a misclick; any content at all is data
+assert(n.deviceIsEmpty({{name: "", ip: "", mac: "", hostname: "", notes: ""}}));
+assert(n.deviceIsEmpty({{name: "  ", ip: "", mac: "", hostname: "", notes: ""}}));
+assert(n.deviceIsEmpty({{assignment: "static", wired: true, active: false}}));
+assert(!n.deviceIsEmpty({{name: "x", ip: "", mac: "", hostname: "", notes: ""}}));
+assert(!n.deviceIsEmpty({{name: "", ip: "192.168.1.5", mac: "", hostname: "", notes: ""}}));
+assert(!n.deviceIsEmpty({{name: "", ip: "", mac: "aa:bb:cc:dd:ee:ff", hostname: "", notes: ""}}));
+assert(!n.deviceIsEmpty({{name: "", ip: "", mac: "", hostname: "h", notes: ""}}));
+assert(!n.deviceIsEmpty({{name: "", ip: "", mac: "", hostname: "", notes: "keep me"}}));
 console.log("view logic ok");
 """
     proc = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False)

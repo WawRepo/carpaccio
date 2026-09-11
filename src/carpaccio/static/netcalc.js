@@ -177,6 +177,18 @@
       String(device[f] || "").toLowerCase().includes(q));
   }
 
+  /* An ENTIRELY empty device row: no name, no IP, no MAC, no hostname, no
+   * notes. That is not data, it is a misclick - usually a stray "+ Add
+   * device". The UI marks such rows and offers one explicit click to remove
+   * them all; it never strips them silently on Save, because silently
+   * deleting a user's rows - even useless ones - is worse than leaving
+   * them. Fields with defaults (assignment, wired, ...) say nothing about
+   * intent, so they do not count. */
+  function deviceIsEmpty(d) {
+    return ["name", "ip", "mac", "hostname", "notes"].every(
+      (f) => String(d[f] || "").trim() === "");
+  }
+
   /* filters: {q, assignment, rand, link, active} - "" means "any". */
   function matchesFilters(device, filters) {
     if (!matchesQuery(device, filters.q)) return false;
@@ -191,6 +203,7 @@
   }
 
   return {
+    deviceIsEmpty,
     parseIp,
     formatIp,
     collapseRanges,

@@ -31,6 +31,21 @@ function clearFilters() {
   view.filters = { q: "", assignment: "", rand: "", link: "", active: "" };
 }
 
+/* TARGETED REFRESH HOOKS - the fix for "every delete scrolls me to the top".
+ *
+ * The device table scrolls inside .table-wrap (its own overflow container),
+ * so a full render() replaces that container and its scrollTop silently
+ * resets to 0. Deleting five rows meant five jumps to the top of a 66-row
+ * table. The cure is the same one the filter box already uses: add/delete
+ * handlers rebuild ONLY the affected tbody (and the small dependent bits -
+ * nav counts, the free panel, the firewall matrix) inside the SAME nodes,
+ * so the browser has no reason to move the scroll position.
+ *
+ * Each tab's render registers its refreshers here; render() wipes them.
+ * A handler that fires when its tab is not mounted (cannot happen today)
+ * falls back to render(). */
+let hooks = {};
+
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -96,9 +111,10 @@ function tabList() {
   return tabs;
 }
 
-function render() {
-  const tabs = tabList();
-  if (!tabs.some((t) => t.id === activeTab)) activeTab = tabs.length ? tabs[0].id : null;
+/* The tab bar alone. Separate from render() so add/delete handlers can
+ * refresh the counts in it without rebuilding the page (nav holds no scroll
+ * position and no focus, so rebuilding it is always safe). */
+function renderNav(tabs) {
   const nav = $("#tabs");
   const tabEls = tabs.map((t) =>
     el(
@@ -111,13 +127,28 @@ function render() {
       t.count !== undefined ? el("span", { class: "count" }, String(t.count)) : null,
     ),
   );
-  // The "+" sits right after the VLAN tabs, because that is what it adds.
+  // The "+ VLAN" sits right after the VLAN tabs, because that is what it
+  // adds - and it SAYS what it adds; a bare "+" next to unlabelled names
+  // explained nothing.
   tabEls.splice(doc.vlans.length, 0, el("div", {
     class: "tab add-vlan",
     title: "Add a VLAN",
-    onclick: addVlan,
-  }, "+"));
+    onclick: () => addVlan(),
+  }, "+ VLAN"));
+  // A quiet caption before the VLAN group: the bar read "home 66 | iot 10 |
+  // guest 13" with nothing saying what those names were. The caption is not
+  // a tab and must not grow into a second header - small, muted, no border.
+  // The other tabs are self-describing; a thin separator marks the boundary.
+  tabEls.unshift(el("span", { class: "tab-caption" }, "vlans"));
+  tabEls.splice(doc.vlans.length + 2, 0, el("span", { class: "tab-sep" }));
   nav.replaceChildren(...tabEls);
+}
+
+function render() {
+  hooks = {}; // whatever was mounted is about to stop existing
+  const tabs = tabList();
+  if (!tabs.some((t) => t.id === activeTab)) activeTab = tabs.length ? tabs[0].id : null;
+  renderNav(tabs);
   const main = $("#content");
   main.replaceChildren();
   if (activeTab) window.history.replaceState(null, "", "#" + encodeURIComponent(activeTab));
@@ -126,7 +157,7 @@ function render() {
   else main.append(
     el("div", { class: "empty" },
       "Empty document - run carpaccio-import, or ",
-      el("button", { class: "small", onclick: addVlan }, "+ Add VLAN")));
+      el("button", { class: "small", onclick: () => addVlan() }, "+ Add VLAN")));
 }
 
 /* ---------- VLAN field helpers (shared by the VLAN tab and DHCP ranges) ----
@@ -210,18 +241,30 @@ function dnsInput(v) {
   });
 }
 
-function addVlan() {
+function addVlan(opts) {
   let n = 1;
   let name = "new-vlan";
   while (doc.vlans.some((v) => v.name === name)) { n += 1; name = "new-vlan-" + n; }
   // subnet starts EMPTY (the schema allows it): a segment being planned has
   // no addressing yet, and the add button must never create a document that
   // cannot be saved.
-  doc.vlans.push({
+  const vlan = {
     name, vlan_id: null, subnet: "", isolated: false,
     dhcp: { enabled: false, start: "", stop: "", lease_seconds: null, dns: [] },
     notes: "", source: "manual",
-  });
+  };
+  doc.vlans.push(vlan);
+  if (opts && opts.stay && hooks.dhcp) {
+    // From the DHCP ranges tab: appending a row there and jumping to a
+    // different tab would BE the scroll-loss bug in another coat. Stay,
+    // refresh the table in place, put the cursor in the new row's name.
+    hooks.dhcp.refresh();
+    renderNav(tabList());
+    hooks.dhcp.focusVlan(vlan);
+    return;
+  }
+  // From the "+ VLAN" tab button: creating a tab and going to it IS the
+  // point, so a full render (a navigation) is correct here.
   activeTab = "vlan:" + name;
   render();
 }
@@ -241,14 +284,29 @@ function deleteVlanGuarded(v) {
   }
   if (!confirm(`Delete VLAN "${v.name}"? (It has no devices.)`)) return;
   doc.vlans.splice(doc.vlans.indexOf(v), 1);
-  activeTab = null;
   hideBanner();
+  if (activeTab === "dhcp" && hooks.dhcp) {
+    // Deleting a row from the DHCP table stays on the DHCP table, scroll
+    // untouched - only the row and the tab-bar entry disappear.
+    hooks.dhcp.refresh();
+    renderNav(tabList());
+    return;
+  }
+  // Deleting the VLAN whose own tab is open: that tab stops existing, so
+  // moving away is not a bug, it is the only honest outcome.
+  activeTab = null;
   render();
 }
 
 /* ---------- per-VLAN device sheet ---------- */
 
 const ASSIGNMENTS = ["reservation", "static", "dhcp"];
+
+function isolationText(vlan) {
+  return vlan.isolated
+    ? " ON — cannot reach other local networks"
+    : " off — can reach other local networks";
+}
 
 function renderVlan(vlan) {
   const main = $("#content");
@@ -282,39 +340,130 @@ function renderVlan(vlan) {
       // Say it on the VLAN's own tab too, not only in the firewall matrix.
       // Whether this network can talk to the others is the first thing anyone
       // asks about a segment, and it is invisible everywhere else in UniFi.
-      ...detail("isolation",
-        el("label", { class: "inline" },
+      ...detail("isolation", (() => {
+        // The label text swaps in place; a render() for one string would
+        // reset the device table's scroll below.
+        const text = el("span", {}, isolationText(vlan));
+        return el("label", { class: "inline" },
           el("input", {
             type: "checkbox", checked: !!vlan.isolated,
-            onchange: (e) => { vlan.isolated = e.target.checked; render(); },
+            onchange: (e) => {
+              vlan.isolated = e.target.checked;
+              text.textContent = isolationText(vlan);
+            },
           }),
-          vlan.isolated
-            ? " ON — cannot reach other local networks"
-            : " off — can reach other local networks")),
+          text);
+      })()),
       ...detail("notes", notesInput(vlan)),
       ...detail("", el("button", {
         class: "small danger",
         onclick: () => deleteVlanGuarded(vlan),
       }, "Delete VLAN")),
   );
-  main.append(el("div", { class: "vlan-top" }, detailsPanel, freePanel(vlan)));
+  let freeBox = freePanel(vlan);
+  main.append(el("div", { class: "vlan-top" }, detailsPanel, freeBox));
 
   // ---- the device sheet: filters and sort are VIEW state, never doc ------
   const tbody = el("tbody");
   const countEl = el("span", { class: "hint count-hint" });
+  const emptyBtn = el("button", { class: "small danger" });
+  let lastRows = [];
   const refreshRows = () => {
     const all = doc.devices.filter((d) => d.vlan === vlan.name);
-    const rows = all
+    lastRows = all
       .filter((d) => netcalc.matchesFilters(d, view.filters))
       // sort() on a COPY (filter() already copied): doc.devices keeps the
       // stored order, or Save would write a meaningless new version.
       .sort((a, b) => netcalc.compareDevices(a, b, view.sort.key, view.sort.dir));
-    tbody.replaceChildren(...rows.map(deviceRow));
-    countEl.textContent = rows.length === all.length
+    tbody.replaceChildren(...lastRows.map(deviceRow));
+    countEl.textContent = lastRows.length === all.length
       ? `${all.length} devices`
-      : `${rows.length} of ${all.length} devices match`;
+      : `${lastRows.length} of ${all.length} devices match`;
+    updateEmptyControl();
   };
+
+  const emptyOnes = () =>
+    doc.devices.filter((d) => d.vlan === vlan.name && netcalc.deviceIsEmpty(d));
+  const updateEmptyControl = () => {
+    const n = emptyOnes().length;
+    emptyBtn.hidden = n === 0; // only ever visible when there is work to do
+    emptyBtn.textContent = `remove ${n} empty row${n === 1 ? "" : "s"}`;
+  };
+  emptyBtn.addEventListener("click", () => {
+    // Explicit, counted, one click - and NEVER done silently on Save:
+    // deleting a user's rows behind their back, even useless ones, is worse
+    // than leaving them.
+    for (const d of emptyOnes()) doc.devices.splice(doc.devices.indexOf(d), 1);
+    devicesMutated();
+    setStatus("empty rows removed", "ok");
+  });
+
+  // Everything that must follow a device add/delete, WITHOUT a render():
+  // rows, the free panel (the address supply changed), the tab-bar count.
+  // The .table-wrap node is untouched, so its scrollTop stays where the
+  // user put it - that is the whole fix.
+  const devicesMutated = () => {
+    refreshRows();
+    const fresh = freePanel(vlan);
+    freeBox.replaceWith(fresh);
+    freeBox = fresh;
+    renderNav(tabList());
+  };
+
+  const focusDevice = (d) => {
+    const tr = tbody.children[lastRows.indexOf(d)];
+    if (!tr) return;
+    const input = tr.querySelector("input");
+    if (input) input.focus();
+    // The one case where moving IS correct: a new row off-screen scrolls
+    // into view - the row, never the top. "nearest" keeps an already
+    // visible row exactly where it is.
+    tr.scrollIntoView({ block: "nearest" });
+  };
+
+  const addDevice = (preset) => {
+    const d = {
+      mac: "", name: "", hostname: "", ip: "", vlan: vlan.name,
+      // "static" is the default for hand-added rows: the whole reason to
+      // add one by hand is that no API will ever report it.
+      assignment: "static", wired: true, active: false, oui: "",
+      last_seen: null, notes: "", source: "manual",
+      ...preset,
+    };
+    doc.devices.push(d);
+    if (!netcalc.matchesFilters(d, view.filters)) {
+      // A row born hidden by the active filter would look like a silent
+      // failure. Clearing the filter is a visible, stated side effect -
+      // never a silent one.
+      clearFilters();
+      if (hooks.filterReset) hooks.filterReset();
+      setStatus("filters cleared to show the new row", "ok");
+    }
+    devicesMutated();
+    focusDevice(d);
+    return d;
+  };
+
+  hooks.devices = { refreshRows, devicesMutated, focusDevice, addDevice };
   refreshRows();
+
+  // Typing into any row can change its emptiness (and, via the IP column,
+  // the free-address list). Input events bubble; one listener per table.
+  tbody.addEventListener("input", (e) => {
+    const tr = e.target.closest("tr");
+    const idx = Array.prototype.indexOf.call(tbody.children, tr);
+    const d = lastRows[idx];
+    if (d) tr.classList.toggle("row-empty", netcalc.deviceIsEmpty(d));
+    updateEmptyControl();
+    // Typing an IP changes the free-address supply; the panel is replaced
+    // in place, which cannot steal focus from the cell being typed in.
+    const td = e.target.closest("td");
+    if (td && td.cellIndex === 1) {
+      const fresh = freePanel(vlan);
+      freeBox.replaceWith(fresh);
+      freeBox = fresh;
+    }
+  });
 
   // Column headers sort on click; the arrow shows which one, which way.
   // A sort click may full-render (nothing is mid-edit in a header), but the
@@ -347,18 +496,8 @@ function renderVlan(vlan) {
         el("thead", {}, headRow),
         tbody)),
     el("div", { class: "toolbar" },
-      el("button", {
-        onclick: () => {
-          doc.devices.push({
-            mac: "", name: "", hostname: "", ip: "", vlan: vlan.name,
-            // "static" is the default for hand-added rows: the whole reason
-            // to add one by hand is that no API will ever report it.
-            assignment: "static", wired: true, active: false, oui: "",
-            last_seen: null, notes: "", source: "manual",
-          });
-          render();
-        },
-      }, "+ Add device"),
+      el("button", { onclick: () => addDevice({}) }, "+ Add device"),
+      emptyBtn,
       el("span", { class: "hint" },
         "static = configured on the host itself; the controller cannot see it, so write it down here.")),
   );
@@ -403,7 +542,11 @@ function freePanel(vlan) {
       chips.append(el("button", {
         class: "chip range",
         title: r.size + " free addresses - click to expand",
-        onclick: () => { view.expanded.add(vlan.name + "|" + r.start); render(); },
+        onclick: () => {
+          view.expanded.add(vlan.name + "|" + r.start);
+          if (hooks.devices) hooks.devices.devicesMutated();
+          else render();
+        },
       }, `${r.start} – ${r.end}`, el("span", { class: "chip-count" }, String(r.size))));
     }
   }
@@ -419,13 +562,10 @@ function addressChip(vlan, ip) {
     class: "chip",
     title: "add a reservation row with this address",
     onclick: () => {
-      doc.devices.push({
-        mac: "", name: "", hostname: "", ip, vlan: vlan.name,
-        assignment: "reservation", wired: true, active: false, oui: "",
-        last_seen: null, notes: "", source: "manual",
-      });
+      if (hooks.devices) {
+        hooks.devices.addDevice({ ip, assignment: "reservation" });
+      }
       setStatus("added " + ip + " — fill in MAC and description, then Save", "ok");
-      render();
     },
   }, ip);
 }
@@ -456,10 +596,20 @@ function filterBar(refreshRows, countEl) {
     filterSelect("active", [["", "active: any"], ["yes", "up"], ["no", "down"]]),
     el("button", {
       class: "small",
-      onclick: () => { clearFilters(); render(); }, // full render rebuilds the boxes empty
+      onclick: () => {
+        clearFilters();
+        if (hooks.filterReset) hooks.filterReset();
+        refreshRows(); // tbody only - the wrap keeps its scroll position
+      },
     }, "clear filters"),
     countEl,
   );
+  // Lets addDevice() blank these boxes when it clears filters so a new row
+  // is not born hidden - without rebuilding the bar (focus, scroll).
+  hooks.filterReset = () => {
+    for (const input of bar.querySelectorAll("input")) input.value = "";
+    for (const sel of bar.querySelectorAll("select")) sel.selectedIndex = 0;
+  };
   return bar;
 }
 
@@ -478,7 +628,10 @@ function notesInput(obj) {
 }
 
 function deviceRow(d) {
-  const tr = el("tr", { class: d.active ? "" : "inactive" });
+  const tr = el("tr", {
+    class: (d.active ? "" : "inactive")
+      + (netcalc.deviceIsEmpty(d) ? " row-empty" : ""),
+  });
   tr.append(textCell(d, "name", { placeholder: "describe it" }));
   tr.append(textCell(d, "ip", { mono: true, placeholder: "0.0.0.0" }));
   tr.append(selectCell(d, "assignment", ASSIGNMENTS));
@@ -500,7 +653,13 @@ function deviceRow(d) {
   tr.append(textCell(d, "notes"));
   tr.append(el("td", {}, el("button", {
     class: "small danger",
-    onclick: () => { doc.devices.splice(doc.devices.indexOf(d), 1); render(); },
+    onclick: () => {
+      doc.devices.splice(doc.devices.indexOf(d), 1);
+      // Targeted refresh, not render(): the whole reason the page stopped
+      // jumping to the top on every delete. See the hooks comment up top.
+      if (hooks.devices) hooks.devices.devicesMutated();
+      else render();
+    },
   }, "✕")));
   return tr;
 }
@@ -510,36 +669,21 @@ function deviceRow(d) {
 function renderDhcp() {
   const main = $("#content");
   const tbody = el("tbody");
-  for (const v of doc.vlans) {
-    const dhcp = ensureDhcp(v);
-    const tr = el("tr");
-    tr.append(el("td", {}, vlanNameControl(v)));
-    tr.append(el("td", { class: "mono" }, vlanIdInput(v)));
-    tr.append(el("td", { class: "mono" }, subnetInput(v)));
-    tr.append(el("td", {}, el("input", {
-      type: "checkbox", checked: !!dhcp.enabled,
-      onchange: (e) => { dhcp.enabled = e.target.checked; },
-    })));
-    tr.append(el("td", { class: "mono" }, rangeInput(dhcp, "start")));
-    tr.append(el("td", { class: "mono" }, rangeInput(dhcp, "stop")));
-    tr.append(el("td", { class: "mono" }, leaseInput(v)));
-    tr.append(el("td", { class: "mono" }, dnsInput(v)));
-    {
-      // The same free-address arithmetic as the VLAN tab's panel, as a count:
-      // this tab is where someone compares pools across VLANs.
-      const taken = doc.devices.map((d) => d.ip || "")
-        .concat(doc.infrastructure.map((i) => i.ip || ""));
-      const ans = netcalc.freeAddresses(v.subnet, v.dhcp, taken);
-      tr.append(el("td", { class: "mono", title: ans.reason || "outside the DHCP pool and unused" },
-        ans.reason ? "—" : String(ans.free_count)));
-    }
-    tr.append(textCell(v, "notes"));
-    tr.append(el("td", {}, el("button", {
-      class: "small danger",
-      onclick: () => deleteVlanGuarded(v),
-    }, "✕")));
-    tbody.append(tr);
-  }
+  const buildRows = () => {
+    tbody.replaceChildren();
+    for (const v of doc.vlans) tbody.append(dhcpRow(v));
+  };
+  hooks.dhcp = {
+    refresh: buildRows,
+    focusVlan: (v) => {
+      const tr = tbody.children[doc.vlans.indexOf(v)];
+      if (!tr) return;
+      const input = tr.querySelector("input");
+      if (input) input.focus();
+      tr.scrollIntoView({ block: "nearest" });
+    },
+  };
+  buildRows();
   main.append(
     el("div", { class: "table-wrap" },
       el("table", {},
@@ -548,12 +692,43 @@ function renderDhcp() {
             .map((h) => el("th", {}, h)))),
         tbody)),
     el("div", { class: "toolbar" },
-      el("button", { onclick: addVlan }, "+ Add VLAN"),
+      el("button", { onclick: () => addVlan({ stay: true }) }, "+ Add VLAN"),
       el("span", { class: "hint" },
         "a UniFi VLAN's name is its merge key and stays read-only; everything else "
         + "is editable. Hand-added VLANs rename freely and may leave the subnet "
         + "empty while the segment is still being planned.")),
   );
+}
+
+function dhcpRow(v) {
+  const dhcp = ensureDhcp(v);
+  const tr = el("tr");
+  tr.append(el("td", {}, vlanNameControl(v)));
+  tr.append(el("td", { class: "mono" }, vlanIdInput(v)));
+  tr.append(el("td", { class: "mono" }, subnetInput(v)));
+  tr.append(el("td", {}, el("input", {
+    type: "checkbox", checked: !!dhcp.enabled,
+    onchange: (e) => { dhcp.enabled = e.target.checked; },
+  })));
+  tr.append(el("td", { class: "mono" }, rangeInput(dhcp, "start")));
+  tr.append(el("td", { class: "mono" }, rangeInput(dhcp, "stop")));
+  tr.append(el("td", { class: "mono" }, leaseInput(v)));
+  tr.append(el("td", { class: "mono" }, dnsInput(v)));
+  {
+    // The same free-address arithmetic as the VLAN tab's panel, as a count:
+    // this tab is where someone compares pools across VLANs.
+    const taken = doc.devices.map((d) => d.ip || "")
+      .concat(doc.infrastructure.map((i) => i.ip || ""));
+    const ans = netcalc.freeAddresses(v.subnet, v.dhcp, taken);
+    tr.append(el("td", { class: "mono", title: ans.reason || "outside the DHCP pool and unused" },
+      ans.reason ? "—" : String(ans.free_count)));
+  }
+  tr.append(textCell(v, "notes"));
+  tr.append(el("td", {}, el("button", {
+    class: "small danger",
+    onclick: () => deleteVlanGuarded(v),
+  }, "✕")));
+  return tr;
 }
 
 /* ---------- firewall: matrix first, then the rule sheet ---------- */
@@ -571,6 +746,58 @@ function renderFirewall() {
   const names = doc.vlans.map((v) => v.name);
 
   main.append(el("h2", {}, "Who can reach whom (first matching enabled rule)"));
+  // The matrix and the rule rows refresh independently and in place: a rule
+  // edit repaints the matrix, an add/delete rebuilds the tbody - never the
+  // page, so neither table's scroll position moves. Same fix as the device
+  // sheet; see the hooks comment up top.
+  let matrixBox = buildMatrix(names);
+  const tbody = el("tbody");
+  const buildRules = () => {
+    tbody.replaceChildren(...doc.firewall_rules.map((r) => ruleRow(r, names)));
+  };
+  hooks.firewall = {
+    refreshMatrix: () => {
+      const fresh = buildMatrix(names);
+      matrixBox.replaceWith(fresh);
+      matrixBox = fresh;
+    },
+    refreshRules: buildRules,
+    focusRule: (r) => {
+      const tr = tbody.children[doc.firewall_rules.indexOf(r)];
+      if (!tr) return;
+      const input = tr.querySelector("input");
+      if (input) input.focus();
+      tr.scrollIntoView({ block: "nearest" });
+    },
+  };
+  buildRules();
+
+  main.append(matrixBox);
+  main.append(el("div", { class: "matrix-legend" },
+    el("b", {}, "isolated"),
+    " = UniFi Network Isolation is on for that source network. It cannot reach any "
+    + "other local network, and this is enforced by the gateway rather than by a "
+    + "rule — so it shows up in no rule list, and a rules-only audit will wrongly "
+    + "report the segment as wide open. ",
+    el("br", {}),
+    "“no rule” means whatever the router defaults to - which on most UniFi setups is ",
+    el("span", { class: "mono" }, "allow"),
+    ". Click a cell to add a rule for that pair."));
+
+  main.append(el("h2", {}, "Rules (evaluated top-down)"));
+  main.append(
+    el("div", { class: "table-wrap" },
+      el("table", {},
+        el("thead", {}, el("tr", {},
+          ...["Name", "Action", "Source", "Destination", "Protocol", "Ports", "On", "Description", ""]
+            .map((h) => el("th", {}, h)))),
+        tbody)),
+    el("div", { class: "toolbar" },
+      el("button", { onclick: () => addRule("", "") }, "+ Add rule")),
+  );
+}
+
+function buildMatrix(names) {
   const matrix = el("table", { class: "matrix" });
   matrix.append(el("tr", {},
     el("th", { class: "axis" }, "src ↓ dst →"),
@@ -606,35 +833,11 @@ function renderFirewall() {
     }
     matrix.append(tr);
   }
-  main.append(el("div", { class: "table-wrap", style: "display:inline-block" }, matrix));
-  main.append(el("div", { class: "matrix-legend" },
-    el("b", {}, "isolated"),
-    " = UniFi Network Isolation is on for that source network. It cannot reach any "
-    + "other local network, and this is enforced by the gateway rather than by a "
-    + "rule — so it shows up in no rule list, and a rules-only audit will wrongly "
-    + "report the segment as wide open. ",
-    el("br", {}),
-    "“no rule” means whatever the router defaults to - which on most UniFi setups is ",
-    el("span", { class: "mono" }, "allow"),
-    ". Click a cell to add a rule for that pair."));
-
-  main.append(el("h2", {}, "Rules (evaluated top-down)"));
-  const tbody = el("tbody");
-  for (const r of doc.firewall_rules) tbody.append(ruleRow(r, names));
-  main.append(
-    el("div", { class: "table-wrap" },
-      el("table", {},
-        el("thead", {}, el("tr", {},
-          ...["Name", "Action", "Source", "Destination", "Protocol", "Ports", "On", "Description", ""]
-            .map((h) => el("th", {}, h)))),
-        tbody)),
-    el("div", { class: "toolbar" },
-      el("button", { onclick: () => addRule("", "") }, "+ Add rule")),
-  );
+  return el("div", { class: "table-wrap", style: "display:inline-block" }, matrix);
 }
 
 function addRule(src, dst) {
-  doc.firewall_rules.push({
+  const rule = {
     id: "manual-" + Date.now(),
     name: src && dst ? `${src} to ${dst}` : "",
     action: "drop",
@@ -644,27 +847,48 @@ function addRule(src, dst) {
     ports: "",
     enabled: true,
     description: "",
-  });
-  render();
+  };
+  doc.firewall_rules.push(rule);
+  if (hooks.firewall) {
+    hooks.firewall.refreshRules();
+    hooks.firewall.refreshMatrix();
+    hooks.firewall.focusRule(rule);
+    renderNav(tabList()); // the Firewall tab shows a rule count
+  } else {
+    render();
+  }
 }
 
 function ruleRow(r, names) {
   const opts = [...names, "any"];
+  // Editing a rule repaints only the matrix above; the row itself already
+  // shows the new value (it is the input), so rebuilding it would just
+  // throw away focus.
+  const repaint = () => { if (hooks.firewall) hooks.firewall.refreshMatrix(); };
   const tr = el("tr");
   tr.append(textCell(r, "name"));
-  tr.append(selectCell(r, "action", ["allow", "drop", "reject"], { onchange: render }));
-  tr.append(selectCell(r, "src", opts, { onchange: render }));
-  tr.append(selectCell(r, "dst", opts, { onchange: render }));
+  tr.append(selectCell(r, "action", ["allow", "drop", "reject"], { onchange: repaint }));
+  tr.append(selectCell(r, "src", opts, { onchange: repaint }));
+  tr.append(selectCell(r, "dst", opts, { onchange: repaint }));
   tr.append(textCell(r, "protocol"));
   tr.append(textCell(r, "ports", { mono: true }));
   tr.append(el("td", {}, el("input", {
     type: "checkbox", checked: r.enabled !== false,
-    onchange: (e) => { r.enabled = e.target.checked; render(); },
+    onchange: (e) => { r.enabled = e.target.checked; repaint(); },
   })));
   tr.append(textCell(r, "description"));
   tr.append(el("td", {}, el("button", {
     class: "small danger",
-    onclick: () => { doc.firewall_rules.splice(doc.firewall_rules.indexOf(r), 1); render(); },
+    onclick: () => {
+      doc.firewall_rules.splice(doc.firewall_rules.indexOf(r), 1);
+      if (hooks.firewall) {
+        hooks.firewall.refreshRules();
+        hooks.firewall.refreshMatrix();
+        renderNav(tabList());
+      } else {
+        render();
+      }
+    },
   }, "✕")));
   return tr;
 }
@@ -675,32 +899,22 @@ function renderWans() {
   const main = $("#content");
   main.append(el("h2", {}, "WAN uplinks"));
   const wbody = el("tbody");
-  for (const w of doc.wans) {
-    const tr = el("tr");
-    const manual = w.source === "manual";
-    // A UniFi uplink's name is its MERGE KEY, so renaming it here would not
-    // match the next import and would duplicate the row instead of renaming
-    // it — read-only, annotate with Notes instead. A hand-added one is never
-    // matched against an import, so it renames freely.
-    if (manual) {
-      tr.append(textCell(w, "name", { placeholder: "name this uplink" }));
-      tr.append(textCell(w, "wan_type", { mono: true, placeholder: "pppoe / dhcp / static" }));
-      tr.append(textCell(w, "failover_priority", { mono: true, placeholder: "4" }));
-    } else {
-      tr.append(el("td", { title: "from UniFi: this name is how the row is matched on "
-                                + "re-import, so it cannot be edited here. Use Notes." }, w.name));
-      tr.append(el("td", { class: "mono" }, w.wan_type || ""));
-      tr.append(el("td", { class: "mono" }, w.failover_priority != null ? String(w.failover_priority) : ""));
-    }
-    tr.append(textCell(w, "notes"));
-    tr.append(el("td", {}, manual
-      ? el("button", {
-          class: "small danger",
-          onclick: () => { doc.wans.splice(doc.wans.indexOf(w), 1); render(); },
-        }, "✕")
-      : el("span", { class: "pill stable", title: "reported by the controller" }, "unifi")));
-    wbody.append(tr);
-  }
+  const ibody = el("tbody");
+  // Same in-place refresh discipline as every other table: add/delete
+  // rebuilds only the tbody it touched, scroll and in-progress edits in the
+  // OTHER table survive. See the hooks comment up top.
+  const buildWans = () => { wbody.replaceChildren(...doc.wans.map(wanRow)); };
+  const buildInfra = () => { ibody.replaceChildren(...doc.infrastructure.map(infraRow)); };
+  const focusLastInput = (tbody) => {
+    const tr = tbody.lastElementChild;
+    if (!tr) return;
+    const input = tr.querySelector("input");
+    if (input) input.focus();
+    tr.scrollIntoView({ block: "nearest" });
+  };
+  hooks.wans = { buildWans, buildInfra, focusLastInput };
+  buildWans();
+  buildInfra();
   main.append(el("div", { class: "table-wrap" },
     el("table", {},
       el("thead", {}, el("tr", {},
@@ -719,7 +933,8 @@ function renderWans() {
           name: "new uplink", wan_type: "", failover_priority: null,
           notes: "", source: "manual",
         });
-        render();
+        buildWans();
+        focusLastInput(wbody);
       },
     }, "+ Add WAN"),
     el("span", { class: "hint" },
@@ -728,26 +943,6 @@ function renderWans() {
       + "Hand-added uplinks are renameable; the controller's are not.")));
 
   main.append(el("h2", {}, "Network gear"));
-  const ibody = el("tbody");
-  for (const i of doc.infrastructure) {
-    const tr = el("tr");
-    // Name, model, kind, IP and MAC are all editable now. They were read-only
-    // because the controller reports them — but the controller only reports
-    // gear it MANAGES. An unmanaged switch, a patch panel or a powerline
-    // adapter is invisible to UniFi and can only ever be typed in here, and a
-    // table you cannot type into is a report, not an inventory.
-    tr.append(textCell(i, "name"));
-    tr.append(textCell(i, "model", { mono: true }));
-    tr.append(textCell(i, "kind", { placeholder: "switch / ap / other" }));
-    tr.append(textCell(i, "ip", { mono: true, placeholder: "0.0.0.0" }));
-    tr.append(textCell(i, "mac", { mono: true, placeholder: "aa:bb:cc:dd:ee:ff" }));
-    tr.append(textCell(i, "notes"));
-    tr.append(el("td", {}, el("button", {
-      class: "small danger",
-      onclick: () => { doc.infrastructure.splice(doc.infrastructure.indexOf(i), 1); render(); },
-    }, "✕")));
-    ibody.append(tr);
-  }
   main.append(el("div", { class: "table-wrap" },
     el("table", {},
       el("thead", {}, el("tr", {},
@@ -760,7 +955,8 @@ function renderWans() {
         doc.infrastructure.push({
           name: "", unifi_name: "", model: "", kind: "", ip: "", mac: "", notes: "",
         });
-        render();
+        buildInfra();
+        focusLastInput(ibody);
       },
     }, "+ Add gear"),
     el("span", { class: "hint" },
@@ -844,6 +1040,59 @@ async function restoreVersion(versionId) {
       + (body.detail || resp.statusText)),
     el("ul", {}, ...(body.changes || body.errors || []).map((c) => el("li", {}, c))),
   ]);
+}
+
+function wanRow(w) {
+  const tr = el("tr");
+  const manual = w.source === "manual";
+  // A UniFi uplink's name is its MERGE KEY, so renaming it here would not
+  // match the next import and would duplicate the row instead of renaming
+  // it — read-only, annotate with Notes instead. A hand-added one is never
+  // matched against an import, so it renames freely.
+  if (manual) {
+    tr.append(textCell(w, "name", { placeholder: "name this uplink" }));
+    tr.append(textCell(w, "wan_type", { mono: true, placeholder: "pppoe / dhcp / static" }));
+    tr.append(textCell(w, "failover_priority", { mono: true, placeholder: "4" }));
+  } else {
+    tr.append(el("td", { title: "from UniFi: this name is how the row is matched on "
+                              + "re-import, so it cannot be edited here. Use Notes." }, w.name));
+    tr.append(el("td", { class: "mono" }, w.wan_type || ""));
+    tr.append(el("td", { class: "mono" }, w.failover_priority != null ? String(w.failover_priority) : ""));
+  }
+  tr.append(textCell(w, "notes"));
+  tr.append(el("td", {}, manual
+    ? el("button", {
+        class: "small danger",
+        onclick: () => {
+          doc.wans.splice(doc.wans.indexOf(w), 1);
+          if (hooks.wans) hooks.wans.buildWans(); else render();
+        },
+      }, "✕")
+    : el("span", { class: "pill stable", title: "reported by the controller" }, "unifi")));
+  return tr;
+}
+
+function infraRow(i) {
+  const tr = el("tr");
+  // Name, model, kind, IP and MAC are all editable now. They were read-only
+  // because the controller reports them — but the controller only reports
+  // gear it MANAGES. An unmanaged switch, a patch panel or a powerline
+  // adapter is invisible to UniFi and can only ever be typed in here, and a
+  // table you cannot type into is a report, not an inventory.
+  tr.append(textCell(i, "name"));
+  tr.append(textCell(i, "model", { mono: true }));
+  tr.append(textCell(i, "kind", { placeholder: "switch / ap / other" }));
+  tr.append(textCell(i, "ip", { mono: true, placeholder: "0.0.0.0" }));
+  tr.append(textCell(i, "mac", { mono: true, placeholder: "aa:bb:cc:dd:ee:ff" }));
+  tr.append(textCell(i, "notes"));
+  tr.append(el("td", {}, el("button", {
+    class: "small danger",
+    onclick: () => {
+      doc.infrastructure.splice(doc.infrastructure.indexOf(i), 1);
+      if (hooks.wans) hooks.wans.buildInfra(); else render();
+    },
+  }, "✕")));
+  return tr;
 }
 
 /* ---------- save / conflict handling ---------- */

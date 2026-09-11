@@ -374,3 +374,29 @@ thead th.sorted { color: var(--accent); }
 /* logout control in the main header */
 .logout-form { display: inline; }
 .logout-form button { font-size: 12.5px; padding: 5px 10px; }
+
+/* tab-bar grouping: a quiet caption for the VLAN tabs, a thin separator
+   before the self-describing ones. Not a second header on purpose. */
+nav .tab-caption {
+  align-self: center;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  padding: 0 6px 2px 2px;
+  user-select: none;
+}
+nav .tab-sep {
+  align-self: center;
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  margin: 0 6px;
+}
+
+/* an entirely empty device row is a misclick, not data - make it look
+   like one. The pill column keeps its meaning; the row itself goes
+   amber-tinged with a dashed edge. */
+tbody tr.row-empty { background: rgba(224, 169, 79, 0.07); }
+tbody tr.row-empty td:first-child { border-left: 3px dashed rgba(224, 169, 79, 0.6); }
