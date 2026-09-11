@@ -26,6 +26,7 @@ from fastapi.templating import Jinja2Templates
 
 from .auth import BasicAuthMiddleware, credentials_from_env
 from .model import describe_diff, empty_document, load_schema, validation_errors
+from .netcalc import free_addresses
 from .store import StaleVersion, Store
 
 _PKG = Path(str(resources.files("carpaccio")))
@@ -334,6 +335,31 @@ def create_app(store: Store | None = None) -> FastAPI:
             return {"vlan": vlan}
 
         return _write(mutate, if_match)
+
+    @app.get("/api/vlans/{name}/free")
+    def vlan_free(name: str) -> JSONResponse:
+        """Which addresses on this VLAN are safe to hand out.
+
+        Free = inside the subnet's usable range, OUTSIDE the DHCP pool (the
+        server will never lease it out from under a reservation or a static),
+        not the gateway, and not already recorded on ANYTHING - devices of
+        every assignment (a dhcp lease sitting outside the pool is a stale
+        lease or a moved host, not a free address) and infrastructure alike.
+        Assumptions are spelled out in netcalc.py; the UI computes the same
+        answer live in netcalc.js, and a test keeps the two in agreement.
+        """
+        doc, version = get_store().load()
+        vlan = next((v for v in doc["vlans"] if v["name"] == name), None)
+        if vlan is None:
+            return _not_found(f"no vlan {name!r}")
+        taken = [d.get("ip", "") for d in doc["devices"]] + [
+            i.get("ip", "") for i in doc["infrastructure"]
+        ]
+        answer = free_addresses(vlan.get("subnet", ""), vlan.get("dhcp"), taken)
+        return JSONResponse(
+            {"vlan": name, "subnet": vlan.get("subnet", ""), **answer},
+            headers={"ETag": version},
+        )
 
     @app.delete("/api/vlans/{name}")
     def delete_vlan(name: str, if_match: str | None = Header(default=None)) -> JSONResponse:

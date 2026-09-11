@@ -99,6 +99,7 @@ retry on conflict: on a 409, re-read and redo.
 | `GET /api/schema` | the JSON Schema the server validates with |
 | `GET /api/history` | stored versions, newest first, each with a plain-English summary of what it changed |
 | `GET /api/{vlans,devices,wans,infrastructure,firewall_rules}` | one section plus the current version token |
+| `GET /api/vlans/{name}/free` | addresses safe to hand out on that VLAN: inside the subnet, outside the DHCP pool, not the gateway, not on any device or gear. Collapsed ranges plus a count; `reason` says why when there is no answer |
 | `POST /api/devices` | add a device (body = the device object; 409 if the MAC exists) |
 | `PATCH /api/devices/{mac}` | update some fields of one device |
 | `DELETE /api/devices/{mac}` | remove one device |
