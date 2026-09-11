@@ -410,7 +410,7 @@ function renderWans() {
     el("span", { class: "hint" },
       "for anything UniFi does not manage — an unmanaged switch, a patch panel, "
       + "a powerline adapter. The controller will never report it, so here is the "
-      + "only place it can exist."));
+      + "only place it can exist.")));
 }
 
 /* ---------- save / conflict handling ---------- */

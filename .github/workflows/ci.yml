@@ -19,6 +19,13 @@ jobs:
         run: |
           uv run ruff check .
           uv run ruff format --check .
+      # NOT optional here, unlike the pytest version which skips when node is
+      # absent. A missing paren in app.js once shipped to the cluster and the
+      # page rendered as a header over an empty void: ruff, pytest and helm lint
+      # all passed, because none of them read JavaScript.
+      - name: JavaScript parses
+        run: for f in src/carpaccio/static/*.js; do node --check "$f"; done
+
       - name: Test
         run: uv run pytest -q
 
