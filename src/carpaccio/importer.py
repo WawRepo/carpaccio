@@ -141,6 +141,11 @@ def parse(raw: dict) -> dict:
         {
             "mac": d["mac"].lower(),
             "name": d.get("name") or d.get("model", ""),
+            # Recorded separately so merge() can tell a human rename from the
+            # controller's own name. parse() MUST set it: without it, the first
+            # merge sees name != unifi_name on every row, decides a human
+            # renamed all of them, and freezes the lot at their current names.
+            "unifi_name": d.get("name") or d.get("model", ""),
             "model": d.get("model", ""),
             "kind": d.get("type", ""),
             "ip": d.get("ip", ""),
@@ -186,10 +191,15 @@ def merge(existing: dict, imported: dict) -> dict:
     """
     merged = {
         "schema_version": 1,
+        # No track_rename: wans are keyed BY name, so a rename would not match
+        # the next import and would duplicate the row rather than rename it.
+        # The UI keeps the WAN name read-only for exactly this reason.
         "wans": _merge_by(existing["wans"], imported["wans"], "name"),
         "vlans": _merge_by(existing["vlans"], imported["vlans"], "name"),
         "devices": [],
-        "infrastructure": _merge_by(existing["infrastructure"], imported["infrastructure"], "mac"),
+        "infrastructure": _merge_by(
+            existing["infrastructure"], imported["infrastructure"], "mac", track_rename=True
+        ),
         # UniFi has zero rules today, so rules are primarily hand-written:
         # keep every existing rule, append imported ones not already present.
         "firewall_rules": list(existing["firewall_rules"]),
@@ -223,16 +233,42 @@ def merge(existing: dict, imported: dict) -> dict:
     return merged
 
 
-def _merge_by(existing: list, imported: list, key: str) -> list:
+def _merge_by(existing: list, imported: list, key: str, *, track_rename: bool = False) -> list:
     """Imported entries win field-wise, but non-empty notes survive; entries
-    only the human knows about are kept."""
+    only the human knows about are kept.
+
+    A HUMAN RENAME ALSO SURVIVES, and it needs two fields to do so. The
+    controller's name arrives on every import, so keeping "the stored name"
+    would freeze the row for ever and a rename in UniFi would never appear.
+    Instead the controller's name is recorded separately as `unifi_name`: if
+    the stored `name` differs from the stored `unifi_name`, a human typed it
+    and it wins; if they match, nobody has renamed this row and it tracks the
+    controller. Without this, making the name editable in the UI would be a
+    lie — the next import would quietly undo it.
+    """
     old = {e[key]: e for e in existing}
     out = []
     for imp in imported:
         prev = old.pop(imp[key], None)
         entry = dict(imp)
-        if prev and prev.get("notes"):
-            entry["notes"] = prev["notes"]
+        if track_rename:
+            entry["unifi_name"] = imp.get("name", "")
+        if prev:
+            if prev.get("notes"):
+                entry["notes"] = prev["notes"]
+            # `"unifi_name" in prev`, not `prev.get(...)`: a document stored
+            # BEFORE this field existed has no unifi_name at all, and reading
+            # its absence as an empty string would mark every existing row as
+            # renamed and freeze the lot. Absent means "cannot tell" — trust
+            # the controller.
+            renamed = (
+                track_rename
+                and "unifi_name" in prev
+                and prev.get("name")
+                and prev["name"] != prev["unifi_name"]
+            )
+            if renamed:
+                entry["name"] = prev["name"]
         out.append(entry)
     out.extend(old.values())
     return out

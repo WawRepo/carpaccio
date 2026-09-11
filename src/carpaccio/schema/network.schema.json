@@ -201,6 +201,10 @@
           },
           "notes": {
             "type": "string"
+          },
+          "unifi_name": {
+            "type": "string",
+            "description": "The controller's own name, refreshed on every import and never edited here. `name` is the human's; it only diverges once someone renames the row, and the divergence is what tells merge() to keep the human's."
           }
         }
       }

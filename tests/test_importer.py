@@ -147,3 +147,41 @@ def test_network_isolation_is_imported(unifi_raw):
     # home is the network the other two are isolated FROM; it is not isolated
     # itself, and a missing flag must read as False rather than None.
     assert by_name["home"]["isolated"] is False
+
+
+def test_infrastructure_rename_survives_reimport(unifi_raw):
+    """Renaming a switch in the UI must not be undone by the next import.
+
+    Network gear is keyed on MAC, so a rename is safe -- but only if merge()
+    can tell "the human typed this" from "the controller said this". It does so
+    by comparing the stored name against the stored unifi_name. Without that,
+    making the field editable would be a lie: the edit would survive until the
+    next import and then vanish, which is worse than a read-only field.
+    """
+    first = parse(unifi_raw)
+    stored = copy.deepcopy(first)
+    target = stored["infrastructure"][0]
+    controller_name = target["name"]
+    target["name"] = "switch-loft-the-one-behind-the-boiler"
+
+    merged = merge(stored, parse(unifi_raw))
+    row = next(i for i in merged["infrastructure"] if i["mac"] == target["mac"])
+
+    assert row["name"] == "switch-loft-the-one-behind-the-boiler"
+    # and the controller's own name is still recorded, so a later UniFi rename
+    # is still visible rather than lost
+    assert row["unifi_name"] == controller_name
+    assert validation_errors(merged) == []
+
+
+def test_untouched_infrastructure_name_tracks_the_controller(unifi_raw):
+    """The other half: if nobody renamed it, the controller still wins."""
+    stored = parse(unifi_raw)
+    incoming = parse(unifi_raw)
+    incoming["infrastructure"][0]["name"] = "renamed-in-unifi"
+
+    merged = merge(stored, incoming)
+    row = next(
+        i for i in merged["infrastructure"] if i["mac"] == incoming["infrastructure"][0]["mac"]
+    )
+    assert row["name"] == "renamed-in-unifi"

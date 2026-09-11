@@ -153,7 +153,13 @@ tbody tr.inactive { opacity: 0.55; }
 
 td input[type="text"], td select {
   background: transparent;
+  /* EVERY EDITABLE CELL MUST LOOK EDITABLE. These were fully transparent until
+     hover, so the whole page read as a read-only report and the first question
+     anyone asked was "where is the edit button?" — there isn't one, because
+     every field is live. A permanent faint underline is the smallest thing
+     that says "type here"; the full border still appears on hover and focus. */
   border: 1px solid transparent;
+  border-bottom: 1px dashed var(--border);
   border-radius: 4px;
   color: var(--text);
   padding: 3px 6px;
@@ -217,3 +223,9 @@ h2:first-child { margin-top: 0; }
 
 td input[type="checkbox"] { accent-color: var(--accent); }
 .empty { color: var(--muted); padding: 18px; text-align: center; }
+
+/* The answer to "where is the edit button?": there is no edit mode, the page
+   IS the editor. Said once in the header, because a dashed underline alone
+   still left it ambiguous whether the values were live or just styled. */
+.editable-hint { color: var(--muted); }
+.editable-hint b { color: var(--text); font-weight: 600; }

@@ -355,6 +355,11 @@ function renderWans() {
   const wbody = el("tbody");
   for (const w of doc.wans) {
     const tr = el("tr");
+    // NOT editable, and this is the one place that is deliberate. WANs are
+    // merged BY NAME — it is their key — so renaming one here would not match
+    // the next import and would silently duplicate the row instead of renaming
+    // it. Three uplinks named by their ISP need annotating, not renaming; use
+    // Notes. (Network gear below is keyed on MAC, so it renames safely.)
     tr.append(el("td", {}, w.name));
     tr.append(el("td", { class: "mono" }, w.wan_type || ""));
     tr.append(el("td", { class: "mono" }, w.failover_priority != null ? String(w.failover_priority) : ""));
@@ -370,18 +375,42 @@ function renderWans() {
   const ibody = el("tbody");
   for (const i of doc.infrastructure) {
     const tr = el("tr");
-    tr.append(el("td", {}, i.name));
-    tr.append(el("td", { class: "mono" }, i.model || ""));
-    tr.append(el("td", {}, i.kind || ""));
-    tr.append(el("td", { class: "mono" }, i.ip || ""));
-    tr.append(el("td", { class: "mono" }, i.mac));
+    // Name, model, kind, IP and MAC are all editable now. They were read-only
+    // because the controller reports them — but the controller only reports
+    // gear it MANAGES. An unmanaged switch, a patch panel or a powerline
+    // adapter is invisible to UniFi and can only ever be typed in here, and a
+    // table you cannot type into is a report, not an inventory.
+    tr.append(textCell(i, "name"));
+    tr.append(textCell(i, "model", { mono: true }));
+    tr.append(textCell(i, "kind", { placeholder: "switch / ap / other" }));
+    tr.append(textCell(i, "ip", { mono: true, placeholder: "0.0.0.0" }));
+    tr.append(textCell(i, "mac", { mono: true, placeholder: "aa:bb:cc:dd:ee:ff" }));
     tr.append(textCell(i, "notes"));
+    tr.append(el("td", {}, el("button", {
+      class: "small danger",
+      onclick: () => { doc.infrastructure.splice(doc.infrastructure.indexOf(i), 1); render(); },
+    }, "✕")));
     ibody.append(tr);
   }
   main.append(el("div", { class: "table-wrap" },
     el("table", {},
-      el("thead", {}, el("tr", {}, ...["Name", "Model", "Kind", "IP", "MAC", "Notes"].map((h) => el("th", {}, h)))),
+      el("thead", {}, el("tr", {},
+        ...["Name", "Model", "Kind", "IP", "MAC", "Notes", ""].map((h) => el("th", {}, h)))),
       ibody)));
+  main.append(el("div", { class: "toolbar" },
+    el("button", {
+      class: "small",
+      onclick: () => {
+        doc.infrastructure.push({
+          name: "", unifi_name: "", model: "", kind: "", ip: "", mac: "", notes: "",
+        });
+        render();
+      },
+    }, "+ Add gear"),
+    el("span", { class: "hint" },
+      "for anything UniFi does not manage — an unmanaged switch, a patch panel, "
+      + "a powerline adapter. The controller will never report it, so here is the "
+      + "only place it can exist."));
 }
 
 /* ---------- save / conflict handling ---------- */
