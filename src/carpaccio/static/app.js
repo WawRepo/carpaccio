@@ -627,6 +627,19 @@ function notesInput(obj) {
   });
 }
 
+/* Up, or WHEN it was last seen. The date and the up/down pill are both a
+   snapshot from the last import, and the hover says so: a device that came
+   back after that import still reads as offline until the next one. */
+function activeCell(d) {
+  if (d.active) return el("td", {}, el("span", { class: "pill up" }, "up"));
+  const seen = netcalc.lastSeenLabel(d.last_seen, Date.now());
+  if (!seen) return el("td", {}, el("span", { class: "pill down" }, "—"));
+  return el("td", {
+    class: "last-seen",
+    title: `offline - the controller last saw it ${seen.full} (as of the last import)`,
+  }, el("div", { class: "mono" }, seen.date), el("div", { class: "ago" }, seen.ago));
+}
+
 function deviceRow(d) {
   const tr = el("tr", {
     class: (d.active ? "" : "inactive")
@@ -649,7 +662,7 @@ function deviceRow(d) {
   tr.append(randTd);
   tr.append(el("td", { class: "mono" }, d.hostname || ""));
   tr.append(el("td", {}, d.wired ? "wired" : "wifi"));
-  tr.append(el("td", {}, el("span", { class: "pill " + (d.active ? "up" : "down") }, d.active ? "up" : "—")));
+  tr.append(activeCell(d));
   tr.append(textCell(d, "notes"));
   tr.append(el("td", {}, el("button", {
     class: "small danger",

@@ -115,6 +115,36 @@
     return Number.isFinite(first) && (first & 2) !== 0;
   }
 
+  /* ---- last seen ---------------------------------------------------------
+   * UniFi's `last_seen` is epoch SECONDS, stored by the importer on every
+   * device. The page used to show a bare dash for anything offline, so a
+   * camera unplugged yesterday and one gone since March looked the same.
+   * Local time on purpose: the date is read by a person in this house.
+   * Returns null when there is no usable date, never "1970-01-01". */
+  function lastSeenLabel(epochSeconds, nowMs) {
+    if (typeof epochSeconds !== "number" || !Number.isFinite(epochSeconds) || epochSeconds <= 0) {
+      return null;
+    }
+    const t = new Date(epochSeconds * 1000);
+    const pad = (x) => String(x).padStart(2, "0");
+    const date = `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}`;
+    const full = `${date} ${pad(t.getHours())}:${pad(t.getMinutes())}`;
+    const days = Math.floor((nowMs - epochSeconds * 1000) / 86400000);
+    let ago;
+    if (days < 1) ago = "today";
+    else if (days === 1) ago = "yesterday";
+    else if (days < 60) ago = `${days} days ago`;
+    else if (days < 730) ago = `${Math.floor(days / 30)} months ago`;
+    else ago = `${Math.floor(days / 365)} years ago`;
+    return { date, full, ago };
+  }
+
+  function seenKey(device) {
+    if (device.active) return Infinity;
+    const s = device.last_seen;
+    return typeof s === "number" && Number.isFinite(s) && s > 0 ? s : null;
+  }
+
   /* ---- sorting -----------------------------------------------------------
    * IP order is NUMERIC (the packed 32-bit value): .9 before .10, .99 before
    * .100. Rows with an empty or malformed value sort LAST IN BOTH DIRECTIONS
@@ -135,10 +165,18 @@
       va = macIsRandomised(a.mac) ? 1 : 0;
       vb = macIsRandomised(b.mac) ? 1 : 0;
       missingA = missingB = false;
-    } else if (key === "wired" || key === "active") {
+    } else if (key === "wired") {
       va = a[key] ? 1 : 0;
       vb = b[key] ? 1 : 0;
       missingA = missingB = false;
+    } else if (key === "active") {
+      // WHEN it was last seen, with "up" counting as now. Ascending therefore
+      // lists the longest-gone device first - the one worth asking about. An
+      // offline row with no date (a hand-added static) sorts last either way.
+      va = seenKey(a);
+      vb = seenKey(b);
+      missingA = va === null;
+      missingB = vb === null;
     } else {
       va = String(a[key] || "").toLowerCase();
       vb = String(b[key] || "").toLowerCase();
@@ -209,6 +247,7 @@
     collapseRanges,
     freeAddresses,
     macIsRandomised,
+    lastSeenLabel,
     compareDevices,
     ipQueryMatches,
     matchesQuery,

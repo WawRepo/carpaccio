@@ -6,6 +6,7 @@ only thing standing between the twins and silent drift.
 """
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -223,4 +224,46 @@ assert(!n.deviceIsEmpty({{name: "", ip: "", mac: "", hostname: "", notes: "keep 
 console.log("view logic ok");
 """
     proc = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False)
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_last_seen_label_and_sort_in_node():
+    """HOME-370: an offline device says WHEN it was last seen, and the Active
+    column sorts by that. TZ is pinned so the local-date formatting is exact."""
+    script = f"""
+const assert = require("assert");
+const n = require({json.dumps(str(NETCALC_JS))});
+
+const now = Date.UTC(2026, 8, 15, 12, 0);             // 2026-09-15 12:00
+const nvr = Date.UTC(2026, 2, 21, 20, 8) / 1000;       // 2026-03-21 20:08
+const l = n.lastSeenLabel(nvr, now);
+assert.strictEqual(l.date, "2026-03-21");
+assert.strictEqual(l.full, "2026-03-21 20:08");
+assert.strictEqual(l.ago, "5 months ago");
+assert.strictEqual(n.lastSeenLabel(now / 1000 - 3600, now).ago, "today");
+assert.strictEqual(n.lastSeenLabel(now / 1000 - 86400, now).ago, "yesterday");
+assert.strictEqual(n.lastSeenLabel(now / 1000 - 10 * 86400, now).ago, "10 days ago");
+assert.strictEqual(n.lastSeenLabel(now / 1000 - 800 * 86400, now).ago, "2 years ago");
+// no usable date is null, never 1970-01-01
+for (const bad of [null, undefined, 0, -5, "1788729046", NaN]) {{
+  assert.strictEqual(n.lastSeenLabel(bad, now), null);
+}}
+
+// Active sort: up counts as now; ascending = longest-gone first;
+// an offline row with no date is last in BOTH directions.
+const up = {{active: true, last_seen: 1}};
+const old = {{active: false, last_seen: nvr}};
+const recent = {{active: false, last_seen: nvr + 86400 * 100}};
+const nodate = {{active: false, last_seen: null}};
+const order = (dir) => [nodate, up, recent, old]
+  .sort((a, b) => n.compareDevices(a, b, "active", dir));
+assert.deepStrictEqual(order(1), [old, recent, up, nodate]);
+assert.deepStrictEqual(order(-1), [up, recent, old, nodate]);
+console.log("last seen ok");
+"""
+    env = {"PATH": os.environ.get("PATH", ""), "TZ": "UTC"}
+    proc = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, check=False, env=env
+    )
     assert proc.returncode == 0, proc.stderr

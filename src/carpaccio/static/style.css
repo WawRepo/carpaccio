@@ -219,6 +219,8 @@ td.mono input, .mono { font-family: var(--mono); font-size: 12.5px; }
 .pill.dhcp { color: var(--muted); }
 .pill.up { color: var(--green); }
 .pill.down { color: var(--muted); }
+td.last-seen { white-space: nowrap; color: var(--muted); font-size: 12.5px; line-height: 1.25; }
+td.last-seen .ago { font-size: 11.5px; }
 
 .toolbar { display: flex; gap: 10px; margin: 12px 0; align-items: center; }
 .toolbar .hint { color: var(--muted); font-size: 12.5px; }
