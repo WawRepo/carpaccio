@@ -49,3 +49,15 @@ def test_netcalc_loads_before_app_js(client):
     body = client.get("/").text
     assert '"/static/netcalc.js"' in body
     assert body.index("netcalc.js") < body.index("app.js")
+
+
+ICON_LINKS = ("/static/favicon.ico", "/static/icon-192.png", "/static/apple-touch-icon.png")
+
+
+def test_both_pages_declare_the_icon(client):
+    """HOME-383: with no <link rel="icon"> the browser tab shows a generic globe.
+    The login page matters most - it is the first page a browser ever sees."""
+    for path in ("/", "/login"):
+        html = client.get(path).text
+        for href in ICON_LINKS:
+            assert f'href="{href}"' in html, f"{path} does not link {href}"

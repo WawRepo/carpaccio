@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/images/logo-readme.png" alt="cARPaccio — a fish sliced thin: every VLAN, every address, written down" width="420">
+</p>
+
 # cARPaccio
 
 **Every VLAN, every address, written down.**
@@ -219,6 +223,11 @@ committed here. The real data lives only in object storage.
 
 
 ## Development
+
+The logo and icon art live in `docs/images/` (full-size originals, not shipped).
+The browser icons in `src/carpaccio/static/` and the README logo are generated
+from them — after changing the art, run `python3 scripts/make_icons.py`
+(needs Pillow) and commit the output.
 
 ```sh
 uv sync --all-groups

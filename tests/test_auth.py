@@ -97,3 +97,15 @@ def test_a_malformed_hash_fails_closed(store, monkeypatch):
 def test_check_rejects_a_wrong_username_even_with_the_right_password():
     assert check(USER, PASSWORD, USER, HASH) is True
     assert check("someone-else", PASSWORD, USER, HASH) is False
+
+
+def test_icons_are_served_without_credentials(secured):
+    """HOME-383. The browser fetches the tab icon for the LOGIN page, before it
+    has a session, so the files must sit on a path the middleware leaves open.
+    A 401 here would show as the generic globe - silently. Checked with auth ON:
+    on an unauthenticated app this test would pass for the wrong reason."""
+    for href in ("/static/favicon.ico", "/static/icon-192.png", "/static/apple-touch-icon.png"):
+        r = secured.get(href)
+        assert r.status_code == 200, (href, r.status_code)
+        assert r.headers["content-type"].startswith("image/"), (href, r.headers["content-type"])
+        assert len(r.content) > 500, href
