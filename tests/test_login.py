@@ -231,3 +231,12 @@ def test_login_page_when_auth_is_off_redirects_home(store, monkeypatch):
     monkeypatch.delenv("CARPACCIO_BASIC_PASSWORD_HASH", raising=False)
     client = TestClient(create_app(store), follow_redirects=False)
     assert client.get("/login").status_code == 302
+
+
+def test_login_page_is_revalidated(secured):
+    """HOME-371: the login page carries the asset fingerprints, so it must never
+    be served from a stale cache."""
+    r = secured.get("/login", headers={"Accept": "text/html"})
+    assert r.status_code == 200
+    assert r.headers["cache-control"] == "no-cache"
+    assert "/static/style.css?v=" in r.text

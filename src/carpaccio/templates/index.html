@@ -4,13 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>cARPaccio</title>
-  <link rel="stylesheet" href="/static/style.css">
-  <!-- Built from docs/images/icon.png by scripts/make_icons.py. Under /static on
+  <link rel="stylesheet" href="{{ static_url('style.css') }}">
+  <!-- Icons: built from docs/images/icon.png by scripts/make_icons.py. Under /static on
        purpose: the only path the auth middleware leaves open, and a browser asks
-       for the icon before it has logged in. -->
-  <link rel="icon" href="/static/favicon.ico" sizes="16x16 32x32 48x48">
-  <link rel="icon" type="image/png" href="/static/icon-192.png" sizes="192x192">
-  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+       for the icon before it has logged in. static_url() adds a content
+       fingerprint so a new release is a new URL (HOME-371). -->
+  <link rel="icon" href="{{ static_url('favicon.ico') }}" sizes="16x16 32x32 48x48">
+  <link rel="icon" type="image/png" href="{{ static_url('icon-192.png') }}" sizes="192x192">
+  <link rel="apple-touch-icon" href="{{ static_url('apple-touch-icon.png') }}">
 </head>
 <body>
   <header>
@@ -32,7 +33,7 @@
   <main id="content"></main>
   <script id="document-data" type="application/json">{{ document_json | safe }}</script>
   <script>window.CARPACCIO_VERSION = {{ version | tojson }};</script>
-  <script src="/static/netcalc.js"></script>
-  <script src="/static/app.js"></script>
+  <script src="{{ static_url('netcalc.js') }}"></script>
+  <script src="{{ static_url('app.js') }}"></script>
 </body>
 </html>

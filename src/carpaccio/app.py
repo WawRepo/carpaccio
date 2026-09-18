@@ -14,6 +14,7 @@ re-applying the change to a document another writer just reshaped, which is
 last-writer-wins wearing a different hat. The caller re-reads and decides.
 """
 
+import hashlib
 import json
 import uuid
 from importlib import resources
@@ -57,6 +58,42 @@ def create_app(store: Store | None = None) -> FastAPI:
     )
     templates = Jinja2Templates(directory=_PKG / "templates")
     app.mount("/static", StaticFiles(directory=_PKG / "static"), name="static")
+
+    # CACHE-BUSTING (HOME-371). Static files used to be linked at fixed URLs
+    # with no Cache-Control, so a browser applied heuristic freshness and kept
+    # the OLD app.js after a release without asking the server: every release
+    # looked like it had done nothing until a hard reload. Now each link
+    # carries a fingerprint of the file's content, so a changed file is a new
+    # URL; a versioned URL can then be cached for ever, and the HTML - which is
+    # where the fingerprints live, and which embeds the live document anyway -
+    # is always revalidated. Computed once at startup: the image is immutable.
+    asset_hashes = {
+        f.name: hashlib.sha256(f.read_bytes()).hexdigest()[:12]
+        for f in (_PKG / "static").iterdir()
+        if f.is_file()
+    }
+
+    def static_url(name: str) -> str:
+        # KeyError on a missing file is deliberate: the page fails to render
+        # in the tests rather than shipping a link to nothing.
+        return f"/static/{name}?v={asset_hashes[name]}"
+
+    templates.env.globals["static_url"] = static_url
+
+    @app.middleware("http")
+    async def cache_headers(request: Request, call_next):
+        response = await call_next(request)
+        path = request.url.path
+        if path.startswith("/static/"):
+            fingerprint = asset_hashes.get(path.removeprefix("/static/"))
+            if fingerprint and request.query_params.get("v") == fingerprint:
+                response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            else:
+                # Unversioned or stale fingerprint: still served, never trusted.
+                response.headers["Cache-Control"] = "no-cache"
+        elif response.headers.get("content-type", "").startswith("text/html"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
     def get_store() -> Store:
         if app.state.store is None:

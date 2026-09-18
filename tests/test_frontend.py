@@ -47,7 +47,7 @@ def test_netcalc_loads_before_app_js(client):
     ever flips, the page dies exactly like the missing-paren incident -
     silently, with every gate green except this one."""
     body = client.get("/").text
-    assert '"/static/netcalc.js"' in body
+    assert '"/static/netcalc.js?v=' in body
     assert body.index("netcalc.js") < body.index("app.js")
 
 
@@ -60,4 +60,40 @@ def test_both_pages_declare_the_icon(client):
     for path in ("/", "/login"):
         html = client.get(path).text
         for href in ICON_LINKS:
-            assert f'href="{href}"' in html, f"{path} does not link {href}"
+            assert f'href="{href}?v=' in html, f"{path} does not link {href}"
+
+
+STATIC_DIR = Path(__file__).parent.parent / "src" / "carpaccio" / "static"
+
+
+def test_every_static_link_carries_its_content_fingerprint(client):
+    """HOME-371: fixed URLs let a browser keep last release's app.js. Every
+    link must carry ?v=<first 12 hex of sha256(file)>, so the fingerprint
+    CHANGES exactly when the file does - checked against the bytes, not
+    against whatever the app happens to print."""
+    import hashlib
+    import re
+
+    body = client.get("/").text
+    links = re.findall(r'(?:href|src)="/static/([^"?]+)\?v=([0-9a-f]+)"', body)
+    names = {n for n, _ in links}
+    assert {"style.css", "netcalc.js", "app.js", "favicon.ico"} <= names, names
+    every = re.findall(r'(?:href|src)="(/static/[^"]*)"', body)
+    unversioned = [u for u in every if "?v=" not in u]
+    assert not unversioned, f"unversioned /static links: {unversioned}"
+    for name, v in links:
+        want = hashlib.sha256((STATIC_DIR / name).read_bytes()).hexdigest()[:12]
+        assert v == want, (name, v, want)
+
+
+def test_pages_revalidate_and_versioned_assets_are_immutable(client):
+    for path in ("/",):
+        assert client.get(path).headers["cache-control"] == "no-cache", path
+    body = client.get("/").text
+    import re
+
+    versioned = re.search(r'src="(/static/app.js\?v=[0-9a-f]+)"', body).group(1)
+    assert "immutable" in client.get(versioned).headers["cache-control"]
+    # the bare URL (an old page, a curl) is still served, but never trusted
+    assert client.get("/static/app.js").headers["cache-control"] == "no-cache"
+    assert client.get("/static/app.js?v=000000000000").headers["cache-control"] == "no-cache"

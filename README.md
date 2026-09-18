@@ -244,6 +244,12 @@ replaced. The real data lives only in the owner's S3 bucket.
 
 ## Deploying to Kubernetes
 
+**A release shows up on a normal reload.** Every `/static` link carries a
+fingerprint of the file's content (`app.js?v=<12 hex>`), so a changed file is
+a new URL that can be cached for ever, and the pages themselves are sent with
+`Cache-Control: no-cache`. Link static files through `static_url()` in the
+templates, never as a bare `/static/...` path — a test fails if you do.
+
 A Helm chart lives in `charts/carpaccio/`. The pod is stateless (all state is
 in S3), so it carries no PVC and no nodeSelector and can schedule on any
 node. S3 credentials are read from an existing Secret — see
