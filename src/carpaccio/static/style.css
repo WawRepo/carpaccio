@@ -219,6 +219,17 @@ td.mono input, .mono { font-family: var(--mono); font-size: 12.5px; }
 .pill.dhcp { color: var(--muted); }
 .pill.up { color: var(--green); }
 .pill.down { color: var(--muted); }
+.pill.reserved { background: rgba(224, 169, 79, 0.12); color: var(--amber); }
+
+/* The "All" tab's two kinds of row must not look alike. A reserved address
+   has no inputs to click, so without a visible difference it reads as a
+   device row that has mysteriously stopped being editable. Muted, italic
+   description, and the VLAN column sits quiet because it is never a device's
+   segment - it is nothing's. */
+tbody tr.reserved-row { background: rgba(224, 169, 79, 0.045); }
+tbody tr.reserved-row td { color: var(--muted); }
+tbody tr.reserved-row td:nth-child(2) { font-style: italic; }
+td.vlan-col { color: var(--muted); white-space: nowrap; }
 td.last-seen { white-space: nowrap; color: var(--muted); font-size: 12.5px; line-height: 1.25; }
 td.last-seen .ago { font-size: 11.5px; }
 

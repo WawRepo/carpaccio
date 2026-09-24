@@ -47,28 +47,14 @@ SECTIONS = ("wans", "vlans", "devices", "infrastructure", "firewall_rules")
 
 
 def _reserved_ips(doc: dict) -> list[str]:
-    """Every address in the reserved section, ranges expanded.
+    """Every reserved address in this document, ranges expanded.
 
-    A range is stored as two endpoints rather than one row per address,
-    because MetalLB's pool is written down as ".240-.244" by the person who
-    configured it, and a list that does not read like the thing it mirrors is
-    a list that drifts from it.
+    The arithmetic lives in netcalc so the browser runs the same rule; see
+    netcalc.reserved_ips for why that matters.
     """
-    from .netcalc import format_ip, parse_ip
+    from .netcalc import reserved_ips
 
-    out: list[str] = []
-    for entry in doc.get("reserved", []) or []:
-        start = parse_ip(entry.get("ip", ""))
-        if start is None:
-            continue
-        end = parse_ip(entry.get("ip_end", "")) if entry.get("ip_end") else start
-        if end is None or end < start:
-            end = start
-        # A typo must not hang the request enumerating four billion addresses.
-        if end - start > 4096:
-            end = start
-        out.extend(format_ip(a) for a in range(start, end + 1))
-    return out
+    return reserved_ips(doc.get("reserved", []))
 
 
 def create_app(store: Store | None = None) -> FastAPI:

@@ -1,6 +1,6 @@
 [project]
 name = "carpaccio"
-version = "0.6.3"
+version = "0.7.0"
 description = "cARPaccio - every VLAN, every address, written down. A home-network inventory sheet."
 readme = "README.md"
 requires-python = ">=3.12"

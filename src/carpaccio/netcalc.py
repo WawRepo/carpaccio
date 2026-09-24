@@ -76,6 +76,38 @@ def collapse_ranges(addresses: list[int]) -> list[dict]:
     ]
 
 
+def reserved_ips(reserved: list | None) -> list[str]:
+    """Every address in the reserved section, ranges expanded.
+
+    A range is stored as two endpoints rather than one row per address,
+    because MetalLB's pool is written down as ".240-.244" by the person who
+    configured it, and a list that does not read like the thing it mirrors is
+    a list that drifts from it.
+
+    THIS LIVES IN netcalc, not in the API layer, because it feeds a free-address
+    answer and there are TWO of those: the server's, and the one the page
+    computes live so the panel tracks unsaved edits. It was in app.py alone,
+    so the API excluded the k3s API VIP from "free" while the browser sitting
+    in front of the same document went on offering it — the exact bug the
+    reserved section was built to close, surviving in the half a human looks
+    at. The twin in netcalc.js is checked against this one by
+    tests/test_netcalc.py.
+    """
+    out: list[str] = []
+    for entry in reserved or []:
+        start = parse_ip(entry.get("ip", ""))
+        if start is None:
+            continue
+        end = parse_ip(entry.get("ip_end", "")) if entry.get("ip_end") else start
+        if end is None or end < start:
+            end = start
+        # A typo must not hang the request enumerating four billion addresses.
+        if end - start > 4096:
+            end = start
+        out.extend(format_ip(a) for a in range(start, end + 1))
+    return out
+
+
 def free_addresses(subnet: str, dhcp: dict | None, taken_ips: list[str]) -> dict:
     """The free-address answer for one VLAN.
 

@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from carpaccio.importer import parse
-from carpaccio.netcalc import free_addresses
+from carpaccio.netcalc import free_addresses, reserved_ips
 from carpaccio.store import MISSING
 
 NETCALC_JS = Path(__file__).parent.parent / "src" / "carpaccio" / "static" / "netcalc.js"
@@ -166,6 +166,49 @@ def test_python_and_javascript_twins_agree():
     assert js_results == py_results
 
 
+RESERVED_SCENARIOS = [
+    # a single address, a range, a range written backwards, a typo'd endpoint,
+    # an empty row, and a range so wide it must be refused rather than enumerated
+    [{"ip": "192.168.1.230", "name": "k3s API VIP"}],
+    [{"ip": "192.168.1.240", "ip_end": "192.168.1.244", "name": "MetalLB pool"}],
+    [{"ip": "192.168.1.244", "ip_end": "192.168.1.240", "name": "backwards"}],
+    [{"ip": "192.168.1.5", "ip_end": "not an address", "name": "typo"}],
+    [{"ip": "", "name": "half typed"}],
+    [{"ip": "10.0.0.1", "ip_end": "10.9.0.1", "name": "absurd"}],
+    [],
+]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_reserved_expansion_twins_agree():
+    """The reserved expansion has a twin too, and it MUST: it feeds the
+    free-address answer on both sides. While it lived only in app.py the API
+    refused to offer the k3s API VIP and the browser panel offered it anyway,
+    from the same document - the bug the reserved section exists to close,
+    surviving in the half a person actually clicks."""
+    script = (
+        f"const n = require({json.dumps(str(NETCALC_JS))});"
+        f"const scenarios = {json.dumps(RESERVED_SCENARIOS)};"
+        "console.log(JSON.stringify(scenarios.map((s) => n.reservedIps(s))));"
+    )
+    proc = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False)
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout) == [reserved_ips(sc) for sc in RESERVED_SCENARIOS]
+
+
+def test_a_reserved_range_is_expanded_and_an_absurd_one_is_not():
+    """Stated in its own right, so the twin test cannot pass by both sides
+    being wrong in the same way."""
+    assert reserved_ips([{"ip": "192.168.1.240", "ip_end": "192.168.1.244"}]) == [
+        f"192.168.1.{n}" for n in range(240, 245)
+    ]
+    # 4096 is the cap; a range past it collapses to its first address rather
+    # than enumerating, so a slipped keystroke cannot hang a request.
+    assert reserved_ips([{"ip": "10.0.0.1", "ip_end": "10.9.0.1"}]) == ["10.0.0.1"]
+    assert reserved_ips([{"ip": "", "name": "half typed"}]) == []
+    assert reserved_ips(None) == []
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 def test_view_logic_in_node():
     """The sorting and filtering that app.js uses, exercised where pytest can
@@ -197,6 +240,16 @@ assert(n.matchesQuery({{ip: "192.168.1.2"}}, "192.168.1.2"));
 assert(!n.matchesQuery({{ip: "192.168.1.25"}}, "192.168.1.2"));
 assert(n.matchesQuery({{ip: "192.168.1.25"}}, "192.168.1."));
 assert(n.matchesQuery({{ip: "192.168.1.25"}}, "192.168"));
+// a BARE number is one octet and matches any position, whole: the last-octet
+// search the box is actually used for. "230" used to match nothing at all.
+assert(n.matchesQuery({{ip: "192.168.1.230"}}, "230"));
+assert(n.matchesQuery({{ip: "10.0.230.4"}}, "230"));
+assert(!n.matchesQuery({{ip: "192.168.1.23"}}, "230"));
+// and the octet boundary still holds in this direction: .2 is not .25
+assert(n.matchesQuery({{ip: "192.168.1.2"}}, "2"));
+assert(!n.matchesQuery({{ip: "192.168.1.25"}}, "2"));
+// a bare number that IS a leading octet keeps working
+assert(n.matchesQuery({{ip: "192.168.1.25"}}, "192"));
 // free-text hits name, hostname and mac, case-insensitively
 assert(n.matchesQuery({{name: "Basement Printer"}}, "printer"));
 assert(n.matchesQuery({{hostname: "pi4", name: ""}}, "PI4"));

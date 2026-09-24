@@ -104,6 +104,18 @@ function tabList() {
     count: doc.devices.filter((d) => d.vlan === v.name).length,
     render: () => renderVlan(v),
   }));
+  // Straight after the VLAN tabs, on the far side of the separator: it is a
+  // VIEW of the VLANs, not one of them, so it must not sit inside the group
+  // the "vlans" caption labels. renderNav()'s splice points are keyed to
+  // doc.vlans.length and are unaffected by anything pushed after this line.
+  tabs.push({
+    id: "all",
+    label: "All",
+    // Devices AND reserved addresses: this badge sits next to a table that
+    // prints "5 rows", and a 3 beside a 5 is a bug report waiting to happen.
+    count: doc.devices.length + (doc.reserved || []).length,
+    render: renderAll,
+  });
   tabs.push({ id: "dhcp", label: "DHCP ranges", render: renderDhcp });
   tabs.push({ id: "firewall", label: "Firewall", count: doc.firewall_rules.length, render: renderFirewall });
   tabs.push({ id: "wans", label: "WANs & infra", render: renderWans });
@@ -503,6 +515,153 @@ function renderVlan(vlan) {
   );
 }
 
+/* ---------- "All" - every VLAN in one table -------------------------------
+
+   A VLAN tab answers "what is on this segment". This one answers "WHERE IS
+   THIS ADDRESS", which is the question actually asked: somebody has an IP in
+   their hand and does not yet know which segment owns it. Same rows, same
+   editing, one extra VLAN column, one filter box over the lot.
+
+   RESERVED ADDRESSES ARE IN THIS TABLE TOO, read-only. They are the addresses
+   no device owns - the k3s API VIP, the MetalLB pool - and they are EDITED on
+   the DHCP tab, which is the right home for them. But somebody searching for
+   .230 is not thinking "that will be filed under DHCP ranges"; they type the
+   number and expect the sheet to say what holds it. Leaving them out of the
+   one table called "All" is exactly how .230 read as missing from the whole
+   document (owner, 2026-09-24) when it had been recorded all along.
+
+   No "+ Add device" here on purpose: a device belongs to a VLAN, and this
+   table spans all of them, so there is no honest answer to which one a new
+   row would join. Add it on the VLAN's own tab. */
+
+function reservedAsRow(r) {
+  // A device-SHAPED view of a reserved address, so one sort and one filter
+  // can run over both kinds without either growing a special case.
+  return {
+    __reserved: r,
+    name: r.name || "",
+    ip: r.ip || "",
+    hostname: "",
+    mac: "",
+    vlan: "",
+    assignment: "reserved",
+    wired: true,
+    active: false,
+    notes: r.notes || "",
+    last_seen: null,
+  };
+}
+
+/* Does a numeric query hit this reserved entry? A RANGE has to answer for
+ * every address inside it - searching "242" must find the MetalLB pool
+ * written as .240-.244, or the pool is as invisible as the VIP was. The
+ * expansion (and its 4096 cap against a fat-fingered ip_end) is netcalc's,
+ * so this asks the same question the free-address answer does. */
+function reservedIpMatches(r, q) {
+  return netcalc.reservedIps([r]).some((ip) => netcalc.ipQueryMatches(ip, q));
+}
+
+function reservedMatchesFilters(r) {
+  // The dropdowns all describe a DEVICE - how it is assigned, whether its MAC
+  // is randomised, wired or wifi, up or down. A reserved address has none of
+  // those properties, so any dropdown set HIDES these rows rather than
+  // inventing an answer for them.
+  const f = view.filters;
+  if (f.assignment || f.rand || f.link || f.active) return false;
+  const q = String(f.q || "").trim().toLowerCase();
+  if (!q) return true;
+  if (/^[\d.]+$/.test(q)) return reservedIpMatches(r, q);
+  return [r.name, r.notes].some((x) => String(x || "").toLowerCase().includes(q));
+}
+
+function allReservedRow(r) {
+  const tr = el("tr", { class: "reserved-row" });
+  const span = r.ip_end ? `${r.ip} – ${r.ip_end}` : (r.ip || "");
+  tr.append(el("td", { class: "vlan-col" }, "—"));
+  tr.append(el("td", {}, r.name || el("span", { class: "hint" }, "unnamed")));
+  tr.append(el("td", { class: "mono" }, span));
+  tr.append(el("td", {}, el("span", {
+    class: "pill reserved",
+    title: "Not a device: an address no machine owns, so no API will ever "
+      + "report it. Excluded from every free-address answer. Edit it on the "
+      + "DHCP ranges tab.",
+  }, "reserved")));
+  // MAC, randomised?, hostname, link, active - none of them mean anything
+  // for an address with no machine behind it. Blank, not "unknown".
+  for (let i = 0; i < 5; i += 1) tr.append(el("td", {}, ""));
+  tr.append(el("td", {}, r.notes || ""));
+  tr.append(el("td", {}, el("span", { class: "hint" }, "DHCP tab")));
+  return tr;
+}
+
+function renderAll() {
+  const main = $("#content");
+  const tbody = el("tbody");
+  const countEl = el("span", { class: "hint count-hint" });
+
+  const refreshRows = () => {
+    const devices = doc.devices.filter((d) => netcalc.matchesFilters(d, view.filters));
+    const reserved = (doc.reserved || []).filter(reservedMatchesFilters);
+    const rows = devices
+      .concat(reserved.map(reservedAsRow))
+      .sort((a, b) => netcalc.compareDevices(a, b, view.sort.key, view.sort.dir));
+    tbody.replaceChildren(...rows.map((row) => {
+      if (row.__reserved) return allReservedRow(row.__reserved);
+      // deviceRow() is the VLAN tabs' row, unchanged - the VLAN column is
+      // pushed on the front here rather than threaded through it, so the
+      // two tables cannot drift apart.
+      const tr = deviceRow(row);
+      tr.insertBefore(el("td", { class: "vlan-col" }, row.vlan || ""), tr.firstChild);
+      return tr;
+    }));
+    const total = doc.devices.length + (doc.reserved || []).length;
+    countEl.textContent = rows.length === total
+      ? `${total} rows`
+      : `${rows.length} of ${total} rows match`;
+  };
+
+  // A delete from any row here must refresh THIS table, not a VLAN's.
+  hooks.devices = {
+    refreshRows,
+    devicesMutated: () => { refreshRows(); renderNav(tabList()); },
+    focusDevice: () => {},
+    addDevice: () => {},
+  };
+  refreshRows();
+
+  const SORTABLE = [
+    ["VLAN", "vlan"], ["Description", "name"], ["IP", "ip"],
+    ["Assignment", "assignment"], ["MAC", "mac"], ["Random MAC?", "rand"],
+    ["Hostname", "hostname"], ["Link", "wired"], ["Active", "active"],
+    ["Notes", null], ["", null],
+  ];
+  const headRow = el("tr", {}, ...SORTABLE.map(([label, key]) => {
+    if (!key) return el("th", {}, label);
+    const active = view.sort.key === key;
+    return el("th", {
+      class: "sortable" + (active ? " sorted" : ""),
+      title: "click to sort" + (active ? ", again to reverse" : ""),
+      onclick: () => {
+        if (view.sort.key === key) view.sort.dir = -view.sort.dir;
+        else view.sort = { key, dir: 1 };
+        render();
+      },
+    }, label + (active ? (view.sort.dir === 1 ? " ▲" : " ▼") : ""));
+  }));
+
+  main.append(
+    filterBar(refreshRows, countEl),
+    el("div", { class: "table-wrap" },
+      el("table", { class: "devices" },
+        el("thead", {}, headRow),
+        tbody)),
+    el("div", { class: "toolbar" },
+      el("span", { class: "hint" },
+        "Every VLAN in one table, plus the reserved addresses no device owns. "
+        + "Add a device on its own VLAN tab; edit a reserved address on the DHCP ranges tab.")),
+  );
+}
+
 /* ---------- "which address can I actually hand out?" ----------------------
    The question this whole batch serves. Free = usable in the subnet, OUTSIDE
    the DHCP pool, not the gateway, not recorded on any device (any assignment
@@ -511,8 +670,12 @@ function renderVlan(vlan) {
    tracks unsaved edits; the API serves the same answer for agents from
    netcalc.py, and a test keeps the twins equal. */
 function freePanel(vlan) {
+  // Reserved addresses are TAKEN, exactly as the API counts them. Leaving
+  // them out here meant the panel a person actually clicks offered the k3s
+  // API VIP as "free to reserve" while the same document's API refused it.
   const taken = doc.devices.map((d) => d.ip || "")
-    .concat(doc.infrastructure.map((i) => i.ip || ""));
+    .concat(doc.infrastructure.map((i) => i.ip || ""))
+    .concat(netcalc.reservedIps(doc.reserved));
   const ans = netcalc.freeAddresses(vlan.subnet, vlan.dhcp, taken);
   const box = el("div", { class: "free-panel" });
   box.append(el("div", { class: "free-title" }, "Free to reserve"));
@@ -584,7 +747,7 @@ function filterBar(refreshRows, countEl) {
   const bar = el("div", { class: "filter-bar" },
     el("input", {
       type: "text", class: "filter-q", value: view.filters.q,
-      placeholder: "filter: name / hostname / MAC, or an IP prefix like 192.168.1.2",
+      placeholder: "filter: name / hostname / MAC, or an IP — 230 finds .230, 192.168.1. the whole /24",
       // refreshRows() only - a full render() here would rebuild this very
       // input and steal focus on every keystroke.
       oninput: (e) => { view.filters.q = e.target.value; refreshRows(); },

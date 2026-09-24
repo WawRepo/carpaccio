@@ -108,6 +108,29 @@
     return result;
   }
 
+  /* Every address in the reserved section, ranges expanded - the twin of
+   * netcalc.py's reserved_ips(), checked against it by tests/test_netcalc.py.
+   *
+   * It lives HERE rather than in app.js because it feeds a free-address
+   * answer, and there are two of those: the server's, and the one this page
+   * computes live so the panel tracks unsaved edits. While the expansion sat
+   * only in app.py, GET /api/vlans/home/free correctly refused to offer the
+   * k3s API VIP and the panel in the browser went on offering it - the bug
+   * the reserved section exists to close, alive in the half a human reads. */
+  function reservedIps(reserved) {
+    const out = [];
+    for (const entry of reserved || []) {
+      const start = parseIp(entry.ip || "");
+      if (start === null) continue;
+      let end = entry.ip_end ? parseIp(entry.ip_end) : start;
+      if (end === null || end < start) end = start;
+      // A typo must not hang the page enumerating four billion addresses.
+      if (end - start > 4096) end = start;
+      for (let a = start; a <= end; a += 1) out.push(formatIp(a));
+    }
+    return out;
+  }
+
   /* Randomised = locally-administered bit of the first octet. Computed from
    * the address, never a vendor list. Single source - app.js uses this one. */
   function macIsRandomised(mac) {
@@ -204,6 +227,14 @@
     if (!ip) return false;
     if (query.endsWith(".")) return ip.startsWith(query);
     if (ip === query) return true;
+    // A query with NO dot in it is a single octet, and on a network where
+    // every address starts 192.168.1 a PREFIX reading of one makes the box
+    // useless: typing "230" matched nothing at all, and the .230 everyone
+    // wanted looked absent from the sheet entirely (owner, 2026-09-24). So a
+    // bare number matches ANY octet, and still matches it WHOLE: "230" finds
+    // 192.168.1.230, and "2" still refuses 192.168.1.25. The octet boundary
+    // is the rule being kept here, not the direction of the match.
+    if (!query.includes(".")) return ip.split(".").includes(query);
     return ip.startsWith(query) && ip.charAt(query.length) === ".";
   }
 
@@ -246,6 +277,7 @@
     formatIp,
     collapseRanges,
     freeAddresses,
+    reservedIps,
     macIsRandomised,
     lastSeenLabel,
     compareDevices,
