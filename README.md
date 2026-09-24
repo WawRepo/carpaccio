@@ -46,6 +46,33 @@ in one screen:
   (`src/carpaccio/schema/network.schema.json`, `GET /api/schema`). An invalid
   document is refused with 422 and the stored object is left untouched.
 
+## Reserved addresses — the ones no device owns
+
+Some addresses are in use and belong to no machine: a virtual IP that floats
+between nodes, a load-balancer pool handed out to services. They are invisible
+to everything else this tool reads.
+
+- **No controller reports them.** There is no lease and no device record.
+- **ARP attributes them to whichever machine answered last**, so they read as a
+  duplicate of a host already in the inventory.
+- **They can be completely silent.** During a failover, or when nothing has
+  spoken to one recently, there is no ARP entry at all.
+
+That last case is why this section exists. "Is this address free?" would answer
+**yes** about an address that is very much in use. On 2026-09-24 the Kubernetes
+API VIP at `192.168.1.230` was nearly handed to a new node; it was caught only
+because a pre-flight ping happened to answer, and answered as the machine that
+held the VIP at that moment.
+
+Put them in the **DHCP ranges** tab, under *Reserved — addresses no device
+owns*. They are excluded from every free-address answer, and an import never
+drops them.
+
+**This list is hand-maintained, and that is the honest answer rather than a
+limitation to apologise for.** An address no API reports is one a human has to
+write down, which is the same reason the tool already carries an
+`assignment: static` case for host-configured addresses.
+
 ## Quickstart
 
 ```sh

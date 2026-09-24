@@ -207,6 +207,11 @@ def merge(existing: dict, imported: dict) -> dict:
         # UniFi has zero rules today, so rules are primarily hand-written:
         # keep every existing rule, append imported ones not already present.
         "firewall_rules": list(existing["firewall_rules"]),
+        # Reserved addresses are hand-written by definition — a VIP or a
+        # load-balancer pool is exactly what no controller can report. An
+        # import must never drop them, or the gap they exist to close reopens
+        # silently at the next sync (HOME-445).
+        "reserved": list(existing.get("reserved", []) or []),
     }
 
     existing_devices = {d["mac"]: d for d in existing["devices"]}
