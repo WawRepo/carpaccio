@@ -26,6 +26,7 @@ def empty_document() -> dict:
         "devices": [],
         "infrastructure": [],
         "firewall_rules": [],
+        "reserved": [],
     }
 
 
@@ -57,6 +58,11 @@ _SECTION_KEYS = {
     "devices": "mac",
     "infrastructure": "mac",
     "firewall_rules": "id",
+    # Keyed by IP, not MAC, and that is the whole point of this section: a
+    # reserved address belongs to NO single device, so there is no MAC to key
+    # it by. A kube-vip control-plane VIP floats between three machines and
+    # answers ARP as whichever one holds it today.
+    "reserved": "ip",
 }
 
 

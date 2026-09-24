@@ -46,6 +46,31 @@ _PKG = Path(str(resources.files("carpaccio")))
 SECTIONS = ("wans", "vlans", "devices", "infrastructure", "firewall_rules")
 
 
+def _reserved_ips(doc: dict) -> list[str]:
+    """Every address in the reserved section, ranges expanded.
+
+    A range is stored as two endpoints rather than one row per address,
+    because MetalLB's pool is written down as ".240-.244" by the person who
+    configured it, and a list that does not read like the thing it mirrors is
+    a list that drifts from it.
+    """
+    from .netcalc import format_ip, parse_ip
+
+    out: list[str] = []
+    for entry in doc.get("reserved", []) or []:
+        start = parse_ip(entry.get("ip", ""))
+        if start is None:
+            continue
+        end = parse_ip(entry.get("ip_end", "")) if entry.get("ip_end") else start
+        if end is None or end < start:
+            end = start
+        # A typo must not hang the request enumerating four billion addresses.
+        if end - start > 4096:
+            end = start
+        out.extend(format_ip(a) for a in range(start, end + 1))
+    return out
+
+
 def create_app(store: Store | None = None) -> FastAPI:
     app = FastAPI(title="cARPaccio", docs_url="/api/docs")
     app.state.store = store  # None means: build from env on first use
@@ -471,9 +496,22 @@ def create_app(store: Store | None = None) -> FastAPI:
         vlan = next((v for v in doc["vlans"] if v["name"] == name), None)
         if vlan is None:
             return _not_found(f"no vlan {name!r}")
-        taken = [d.get("ip", "") for d in doc["devices"]] + [
-            i.get("ip", "") for i in doc["infrastructure"]
-        ]
+        taken = (
+            [d.get("ip", "") for d in doc["devices"]]
+            + [i.get("ip", "") for i in doc["infrastructure"]]
+            # Reserved addresses, which is the case a device list cannot cover
+            # (HOME-445). A kube-vip VIP or a MetalLB pool address belongs to no
+            # machine: no API reports it, and ARP attributes it to whichever node
+            # answered last — so it reads as a duplicate of a host already listed,
+            # or, if nothing has spoken to it recently, as nothing at all.
+            #
+            # That last case is the dangerous one. "Is this address free?" would
+            # answer YES about the Kubernetes API VIP, and taking it makes the
+            # cluster API intermittently unreachable from everywhere while looking
+            # like a flaky network. Nearly done on 2026-09-24; it was caught only
+            # because the pre-flight ping happened to answer.
+            + _reserved_ips(doc)
+        )
         answer = free_addresses(vlan.get("subnet", ""), vlan.get("dhcp"), taken)
         return JSONResponse(
             {"vlan": name, "subnet": vlan.get("subnet", ""), **answer},

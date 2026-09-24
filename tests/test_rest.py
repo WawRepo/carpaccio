@@ -166,3 +166,83 @@ def test_firewall_rule_crud(client, unifi_raw):
 
     assert client.delete(f"/api/firewall_rules/{rule_id}").status_code == 200
     assert client.delete(f"/api/firewall_rules/{rule_id}").status_code == 404
+
+
+def test_reserved_addresses_are_never_offered_as_free(client, unifi_raw):
+    """A reserved address must not be offered, even when nothing is using it.
+
+    HOME-445. This is the case a device list structurally cannot cover: a
+    kube-vip VIP or a MetalLB pool address belongs to no machine, so no API
+    reports it and ARP attributes it to whichever node answered last. When
+    nothing has spoken to it recently there is no ARP entry at all, and a
+    "silent, therefore free" answer is how the Kubernetes API VIP nearly got
+    handed to a new node on 2026-09-24 — which would have made the cluster
+    API intermittently unreachable from everywhere while looking like a flaky
+    network.
+
+    So the test asserts the SILENT case, which is the dangerous one. There is
+    no device, no lease and no traffic here: only the reserved entry.
+    """
+    version = seed(client, unifi_raw)
+
+    before = client.get("/api/vlans/home/free").json()
+    free_before = {a for r in before["free_ranges"] for a in _expand(r)}
+    assert "192.168.1.230" in free_before, "precondition: nothing else claims .230"
+    assert "192.168.1.242" in free_before, "precondition: nothing else claims .242"
+
+    doc = client.get("/api/network").json()["document"]
+    doc["reserved"] = [
+        {
+            "ip": "192.168.1.230",
+            "name": "k3s API VIP (kube-vip)",
+            "notes": "Floats between the control-plane nodes; taking it breaks the cluster API.",
+        },
+        {
+            "ip": "192.168.1.240",
+            "ip_end": "192.168.1.244",
+            "name": "MetalLB pool",
+            "notes": "Handed to Kubernetes services: Traefik, loki-lan, tempo-lan.",
+        },
+    ]
+    saved = client.put("/api/network", json={"version": version, "document": doc})
+    assert saved.status_code == 200, saved.text
+
+    after = client.get("/api/vlans/home/free").json()
+    free_after = {a for r in after["free_ranges"] for a in _expand(r)}
+
+    assert "192.168.1.230" not in free_after
+    for last in range(240, 245):
+        assert f"192.168.1.{last}" not in free_after, f".{last} is in the MetalLB pool"
+
+    # Count the drop against what was ACTUALLY free before, not against the six
+    # addresses reserved. Two of the MetalLB pool were already claimed by
+    # devices in the fixture, so hardcoding 6 asserted a fact about the fixture
+    # rather than about the behaviour under test.
+    reserved = {"192.168.1.230"} | {f"192.168.1.{n}" for n in range(240, 245)}
+    newly_excluded = len(reserved & free_before)
+    assert newly_excluded > 0, "the test proves nothing if none of them were free"
+    assert after["free_count"] == before["free_count"] - newly_excluded
+
+
+def test_an_import_never_drops_reserved_addresses(client, unifi_raw):
+    """The gap must not reopen at the next UniFi sync.
+
+    Reserved entries are hand-written by definition — the controller cannot
+    report them. If a merge dropped them, the protection above would vanish
+    silently the next time somebody imported, which is worse than never
+    having had it: the answer would go back to "free" with no warning.
+    """
+    from carpaccio.importer import merge, parse
+
+    existing = parse(unifi_raw)
+    existing["reserved"] = [{"ip": "192.168.1.230", "name": "k3s API VIP (kube-vip)"}]
+
+    merged = merge(existing, parse(unifi_raw))
+
+    assert merged["reserved"] == existing["reserved"]
+
+
+def _expand(r: dict) -> list[str]:
+    from carpaccio.netcalc import format_ip, parse_ip
+
+    return [format_ip(a) for a in range(parse_ip(r["start"]), parse_ip(r["end"]) + 1)]

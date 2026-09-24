@@ -710,7 +710,77 @@ function renderDhcp() {
         "a UniFi VLAN's name is its merge key and stays read-only; everything else "
         + "is editable. Hand-added VLANs rename freely and may leave the subnet "
         + "empty while the segment is still being planned.")),
+    reservedSection(),
   );
+}
+
+/* Addresses that are in use but belong to NO device (HOME-445).
+ *
+ * Shown here, in the view where someone asks "what is free", because that is
+ * where the mistake gets made. A kube-vip VIP or a MetalLB pool address is
+ * invisible to everything else this tool reads: no controller reports it, and
+ * ARP attributes it to whichever node answered last — so it reads as a
+ * duplicate of a host already listed, or, when nothing has spoken to it
+ * recently, as nothing at all. That silent case is the dangerous one: the
+ * Kubernetes API VIP nearly got handed to a new node on 2026-09-24.
+ *
+ * Hand-maintained on purpose. There is no source to import these from, and
+ * saying so plainly is better than implying a sync that cannot exist. */
+function reservedSection() {
+  const list = doc.reserved || (doc.reserved = []);
+  const tbody = el("tbody");
+
+  const buildRows = () => {
+    tbody.replaceChildren();
+    if (!list.length) {
+      tbody.append(el("tr", {},
+        el("td", { colspan: 5, class: "hint" },
+          "Nothing reserved yet. Add the addresses no device owns — virtual IPs, "
+          + "load-balancer pools — or they will be offered as free.")));
+      return;
+    }
+    for (const r of list) tbody.append(reservedRow(r, buildRows));
+  };
+  buildRows();
+
+  return el("div", {},
+    el("h2", {}, "Reserved — addresses no device owns"),
+    el("div", { class: "table-wrap" },
+      el("table", {},
+        el("thead", {}, el("tr", {},
+          ...["Address", "Last of range", "What holds it", "Why", ""].map((h) => el("th", {}, h)))),
+        tbody)),
+    el("div", { class: "toolbar" },
+      el("button", {
+        onclick: () => {
+          list.push({ ip: "", ip_end: "", name: "", notes: "" });
+          buildRows();
+        },
+      }, "+ Add reserved address"),
+      el("span", { class: "hint" },
+        "These are excluded from every free-address answer. Leave 'Last of range' "
+        + "empty for a single address.")),
+  );
+}
+
+function reservedRow(r, rebuild) {
+  const tr = el("tr");
+  const field = (key, cls) => el("input", {
+    class: cls || "", value: r[key] || "",
+    oninput: (e) => { r[key] = e.target.value; },
+  });
+  tr.append(el("td", { class: "mono" }, field("ip", "mono")));
+  tr.append(el("td", { class: "mono" }, field("ip_end", "mono")));
+  tr.append(el("td", {}, field("name")));
+  tr.append(el("td", {}, field("notes")));
+  tr.append(el("td", {}, el("button", {
+    onclick: () => {
+      const list = doc.reserved;
+      list.splice(list.indexOf(r), 1);
+      rebuild();
+    },
+  }, "Delete")));
+  return tr;
 }
 
 function dhcpRow(v) {

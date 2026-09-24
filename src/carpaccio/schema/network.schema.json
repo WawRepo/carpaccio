@@ -281,6 +281,36 @@
           }
         }
       }
+    },
+    "reserved": {
+      "type": "array",
+      "description": "Addresses that are in use but belong to no single device: virtual IPs, load-balancer pools, anything an API will never report and ARP will attribute to whichever machine answered last. Hand-maintained on purpose \u2014 there is no source to import them from.",
+      "items": {
+        "type": "object",
+        "required": [
+          "ip",
+          "name"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "ip": {
+            "type": "string",
+            "description": "The reserved address, or the first of a range."
+          },
+          "ip_end": {
+            "type": "string",
+            "description": "Last address, when this reserves a range."
+          },
+          "name": {
+            "type": "string",
+            "description": "What holds it, in words a human uses."
+          },
+          "notes": {
+            "type": "string",
+            "description": "Why it is reserved and what breaks if it is handed out."
+          }
+        }
+      }
     }
   }
 }
