@@ -80,12 +80,29 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Provenance + SBOM, same as ghcr.io/wawrepo/petty already carries.
-      - uses: actions/attest-build-provenance@v2
+      # Provenance, same as ghcr.io/wawrepo/petty already carries.
+      #
+      # SKIPPED WHILE THIS REPOSITORY IS PRIVATE, and that is GitHub's rule
+      # rather than a choice: attestation storage is "not available for
+      # user-owned private repositories". Measured the hard way on the v0.7.0
+      # release — the image built and pushed fine and then the run went red on
+      # the very last step, which reads as a failed release when nothing was
+      # wrong with the artefact.
+      #
+      # The condition is deliberately on repo VISIBILITY, not a hardcoded
+      # false: the day HOME-341 makes this public, attestations start working
+      # again with no edit here and no one having to remember.
+      - name: Attach build provenance
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest-build-provenance@v2
         with:
           subject-name: ${{ steps.ref.outputs.image }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
+
+      - name: Note when provenance was skipped
+        if: ${{ github.event.repository.private }}
+        run: echo "::notice::Build provenance skipped — GitHub does not store attestations for user-owned PRIVATE repositories. The image is pushed and usable; it simply carries no provenance until this repo is public (HOME-341)." 
 
       # The digest is what the cluster pins. Printing it in the summary means
       # the next step — updating terraform — is copy-paste rather than a
