@@ -30,6 +30,14 @@ and writes it. You do not open the sheet and you do not edit config.
 Everything below serves that loop. If you are wiring an agent up, you want
 **[SKILL.md](SKILL.md)** — it is written for the agent, not about it.
 
+**Two things you have to tell it, because they are not in this repo and
+cannot be guessed:** where your cARPaccio is and how to authenticate, and —
+the one people forget — *where the truth lives*. cARPaccio discovers nothing.
+To correct it, an agent needs somewhere real to compare it against: your
+controller, your inventory file, your cluster, SSH to the hosts, or you. That
+is different at every site, so SKILL.md tells the agent to ask rather than
+assume, and to write your answer down so it never asks twice.
+
 ## Why it exists
 
 **A network's real state is never in one system, and the parts no system

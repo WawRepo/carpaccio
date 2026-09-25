@@ -20,19 +20,57 @@ address that a machine is using right now, if nothing ever recorded that
 machine. Keeping the document current IS the job; answering questions from it
 is the easy part.
 
-## Connect
+## Before you can do anything, you need two things
+
+**Neither is in this repository. Both are site-specific. If you have not been
+told them, ask — do not guess, and do not scan for them.**
+
+### 1. Where cARPaccio is, and how to authenticate
 
 ```
-BASE=https://carpaccio.example.internal
-curl -sf -u "$USER:$PASS" "$BASE/api/network"
+BASE=https://carpaccio.example.internal      # the instance for THIS network
+USER=... PASS=...                            # HTTP Basic
 ```
 
-HTTP Basic. Credentials come from the environment — never a flag, never a
-file in the repo. An unauthenticated API call gets a **401 with JSON**, never
-an HTML redirect, so a failure looks like a failure and not like a page.
+Credentials come from the environment or the operator's secret store — never
+a flag, never a file in this repo. An unauthenticated call gets a **401 with
+JSON**, never an HTML redirect, so a failure looks like a failure.
 
-Start with `GET /api/schema`. It is the schema the server actually validates
-against, so it is never out of date with the thing rejecting your write.
+Check you are talking to the right thing before you write anything:
+
+```sh
+curl -sf "$BASE/healthz"                       # liveness, and whether S3 answers
+curl -sf -u "$USER:$PASS" "$BASE/api/schema"   # what the server will accept
+```
+
+### 2. Where the TRUTH lives — and this is the part people forget
+
+cARPaccio **discovers nothing**. To correct it you need somewhere real to
+compare it against, and that place is different at every site. Ask the
+operator, in these words if it helps:
+
+> *"When you want to know what is actually on this network — what do you
+> look at? A controller, an inventory file, a cluster, a DHCP server, a
+> spreadsheet? And how do I reach it?"*
+
+Typical answers, none of which you should assume:
+
+| What | Gives you | Reach it how |
+|---|---|---|
+| A router or controller (UniFi, OPNsense, Mikrotik…) | leases, reservations, clients | an API, usually read-only credentials |
+| An infrastructure inventory (Ansible, Terraform, a hosts file) | machines and their intended addresses | a file in a repo you were given |
+| A cluster | nodes, load-balancer addresses, virtual IPs | `kubectl`, a kubeconfig |
+| The hosts themselves | the address actually configured, and the MAC | SSH |
+| A person | everything nothing else knows | ask them |
+
+**Write the answer down where the next session will find it** — the
+operator's agent instructions, a project file, whatever they use. Being told
+once and losing it means asking again, and an operator who answers the same
+question three times stops trusting the loop.
+
+**If you were given nothing:** you can still read and answer questions from
+the document. Say plainly that you cannot verify it against anything, because
+an answer from an unverified document sounds exactly like a verified one.
 
 ## The write contract, which is the whole API
 
@@ -132,9 +170,9 @@ trailing dot is an explicit prefix: `192.168.1.` is the whole /24.
 
 ## When you are reconciling against reality
 
-The useful sweep is comparing cARPaccio against a list you trust — an
-inventory file, a cluster's node list, a DHCP config — and writing down the
-difference. Two directions, and the second is the one that gets forgotten:
+Compare cARPaccio against the sources the operator named (see above — if
+nobody named any, that is the question to ask before starting) and write down
+the difference. Two directions, and the second is the one that gets forgotten:
 
 1. **Things that exist but are not recorded** — hosts missing from the sheet.
 2. **Addresses in use that belong to no device** — VIPs, pools, anything
