@@ -46,9 +46,21 @@ def test_every_device_maps_to_a_vlan(unifi_raw):
 
 
 def test_mac_is_randomised():
-    assert mac_is_randomised("02:00:5e:00:53:1f")  # b6 = ...0110, bit 1 set
+    # 02:00:5e:... is the RFC 7042 documentation range with the
+    # locally-administered bit set, which is exactly what this asserts.
+    # This was ALSO a real device's address until HOME-341 — the first audit
+    # caught the burned-in MAC on the line below and missed this one, because
+    # a randomised MAC does not look like hardware. It still named a device
+    # that was on this network the day it was written.
+    assert mac_is_randomised("02:00:5e:00:53:1f")  # 02 = ...0010, bit 1 set
     assert mac_is_randomised("0a:11:22:33:44:55")
-    assert not mac_is_randomised("00:00:5e:00:53:2b")  # burned-in Pi address
+    # 00:00:5e:00:53:xx is reserved for documentation by RFC 7042 §2.1.2, the
+    # MAC equivalent of 192.0.2.0/24. It was a real Raspberry Pi's address
+    # until HOME-341: a MAC is not a secret — not a credential, not routable —
+    # but it fingerprints hardware in someone's house, and the test only ever
+    # needed a first octet with the locally-administered bit clear. There is
+    # no reason to spend a real device to get one.
+    assert not mac_is_randomised("00:00:5e:00:53:2b")
     assert not mac_is_randomised("00:11:22:33:44:55")
 
 
