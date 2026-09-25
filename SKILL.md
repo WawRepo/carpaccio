@@ -8,20 +8,12 @@ description: Read and maintain a network inventory — VLANs, devices, DHCP rang
 A document describing a network, and an API built for you to maintain it.
 The human reads the web UI. You do the writing.
 
-**If you are sitting in the cARPaccio repository, you probably do not need
-this file.** Read `README.md`, `src/carpaccio/app.py` and the 98 tests — they
-are more precise than any summary, and they cannot drift from the code.
+**In the cARPaccio repo?** Read the code instead — it cannot drift. This file
+is for the normal case: you are running somebody's network, you have a URL and
+a password, and you will never see that repo.
 
-This file exists for the other case, which is the normal one: **you are
-running somebody's network and cARPaccio is one tool you have been handed.**
-You have a URL and a password. You will never see this repository. That was
-true of the session this tool was built for — the agent that added two missing
-hosts had an endpoint and nothing else.
-
-So everything below is deliberately what you CANNOT get by asking the server:
-what it does not know about itself, what only a person can tell you, and what
-has already gone wrong here. **For anything mechanical — routes, fields,
-types, required properties — ask the server, never this file.**
+Everything here is what you CANNOT get by asking the server. For anything
+mechanical — routes, fields, types — ask the server.
 
 ## The one thing to understand first
 
@@ -48,7 +40,8 @@ USER=... PASS=...                            # HTTP Basic
 ```
 
 Credentials come from the environment or the operator's secret store — never
-a flag, never a file in this repo. An unauthenticated call gets a **401 with
+a flag, never a file in this repo. **A local `docker compose` instance has no
+auth at all**: if `GET /healthz` reports `"auth":"off"`, drop the `-u`. An unauthenticated call gets a **401 with
 JSON**, never an HTML redirect, so a failure looks like a failure.
 
 Check you are talking to the right thing before you write anything:
@@ -153,10 +146,6 @@ subnet, outside the DHCP pool, not the gateway, not on any device, not
 infrastructure, not reserved. Collapsed into ranges with a count. When there
 is no answer, `reason` says why in words.
 
-Searching the sheet: a bare number is **one octet, matched whole, in any
-position** — `230` finds `192.168.1.230`, and `2` refuses `192.168.1.25`. A
-trailing dot is an explicit prefix: `192.168.1.` is the whole /24.
-
 ## Traps that have actually bitten
 
 - **A randomised MAC cannot hold a DHCP reservation.** The locally-administered
@@ -168,13 +157,30 @@ trailing dot is an explicit prefix: `192.168.1.` is the whole /24.
   per-network isolation toggle that appears in no rule table. Check the VLAN's
   `isolated` flag before reporting a network as unsegmented — telling someone
   to rebuild a wall that is already standing is worse than saying nothing.
-- **A UniFi VLAN cannot be renamed here** (409). Its name is the merge key on
+- **An IMPORTED VLAN cannot be renamed here** (409) — one whose `source` is not
+  `manual`. Its name is the merge key on
   re-import; renaming would duplicate the segment. Rename it at the source.
 - **A VLAN with devices cannot be deleted** (409, with the count). Move the
   devices first. Nothing is dropped silently.
 - **An import never overwrites human knowledge.** Hand-added `static` rows,
   notes, names and the whole `reserved` section survive. You may write freely;
   the next sync will not eat it.
+
+## Starting from an empty document
+
+A fresh instance has no VLANs and no devices, and **there may be no importer
+for this network at all** — in which case you are the importer. That is the
+normal path, not a fallback.
+
+1. Ask where the truth lives (above). Read it — router API, inventory file,
+   SSH to the machines, or the person.
+2. `POST /api/vlans` for each segment you find. A VLAN you create is stored
+   with `source: manual`.
+3. `POST /api/devices` for each machine, with `source: manual`. Record how the
+   address is held — `static` if it is set on the machine itself, `dhcp` if it
+   came from a lease, `reservation` if the router pins it.
+4. Say what you could not find out, rather than leaving a gap that reads like
+   an absence of devices.
 
 ## When you are reconciling against reality
 
