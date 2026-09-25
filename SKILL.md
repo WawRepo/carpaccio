@@ -8,6 +8,21 @@ description: Read and maintain a network inventory — VLANs, devices, DHCP rang
 A document describing a network, and an API built for you to maintain it.
 The human reads the web UI. You do the writing.
 
+**If you are sitting in the cARPaccio repository, you probably do not need
+this file.** Read `README.md`, `src/carpaccio/app.py` and the 98 tests — they
+are more precise than any summary, and they cannot drift from the code.
+
+This file exists for the other case, which is the normal one: **you are
+running somebody's network and cARPaccio is one tool you have been handed.**
+You have a URL and a password. You will never see this repository. That was
+true of the session this tool was built for — the agent that added two missing
+hosts had an endpoint and nothing else.
+
+So everything below is deliberately what you CANNOT get by asking the server:
+what it does not know about itself, what only a person can tell you, and what
+has already gone wrong here. **For anything mechanical — routes, fields,
+types, required properties — ask the server, never this file.**
+
 ## The one thing to understand first
 
 **The document is the truth, and it is only as true as the last thing written
@@ -74,6 +89,11 @@ an answer from an unverified document sounds exactly like a verified one.
 
 ## The write contract, which is the whole API
 
+**Get the route list and the document model from the running server, not from
+here** — `GET /api/schema` is the schema it actually validates against, so it
+can never be out of date with the thing rejecting your write. The behaviour
+below is the part the schema does not describe:
+
 1. Every read hands you a **version token**.
 2. Every write must present it.
 3. A stale token is **409**, with a description of what changed.
@@ -82,28 +102,14 @@ an answer from an unverified document sounds exactly like a verified one.
 That is deliberate. Last-writer-wins on a firewall table is how a VLAN quietly
 stops being separated.
 
-```sh
-# whole document
-curl -sf -u "$USER:$PASS" "$BASE/api/network"        # -> {version, document}
-curl -sf -u "$USER:$PASS" -X PUT "$BASE/api/network" \
-     -H 'content-type: application/json' \
-     -d '{"version":"<token>","document":{...}}'
+Per-resource writes (`POST/PATCH/DELETE /api/devices` and friends) read the
+document, change one thing, and save against the version they just read, so
+they conflict exactly like a whole-document `PUT`. Prefer them; send the whole
+document only when changing many things at once. An optional
+`If-Match: <version>` pins a write to a version you read earlier.
 
-# one resource — same conflict behaviour, less to send
-curl -sf -u "$USER:$PASS" -X POST "$BASE/api/devices" \
-     -H 'content-type: application/json' -d '{...device...}'
-
-# pin a write to a version you read earlier
-curl -sf -u "$USER:$PASS" -X PATCH "$BASE/api/devices/$MAC" \
-     -H "If-Match: <token>" -H 'content-type: application/json' -d '{...}'
-```
-
-Per-resource writes read, change one thing, and save against the version they
-just read. Prefer them. Send the whole document only when you are changing
-many things at once.
-
-An invalid document is **422** and the stored object is left untouched. You
-cannot corrupt it with a bad write; you can only fail.
+An invalid document is **422** and the stored object is left untouched. **You
+cannot corrupt it with a bad write — you can only fail.** Write freely.
 
 ## What only a human or an agent can know
 
@@ -136,7 +142,9 @@ and covers every address inside it.
 ```
 
 Both are excluded from every free-address answer, and an import never drops
-them.
+them. The examples above show the FIELDS THAT CARRY MEANING, not the full
+shape — `GET /api/schema` is the authority on what is required and what is
+allowed.
 
 ## Asking where an address is
 
