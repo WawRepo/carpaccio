@@ -22,7 +22,8 @@ on:
         required: true
 
 permissions:
-  contents: read
+  # write, not read: the last step cuts the GitHub Release itself.
+  contents: write
   packages: write
   # Both are needed for build provenance. id-token lets the runner prove which
   # workflow produced the image; without it the attestation step fails at the
@@ -116,3 +117,43 @@ jobs:
             echo 'default = "${{ steps.ref.outputs.image }}:${{ steps.ref.outputs.version }}@${{ steps.push.outputs.digest }}"'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # The GitHub Release. Cut LAST, deliberately: it is the human-visible
+      # record that a version exists, so it must not appear for a build that
+      # then failed to push. Everything above has to succeed first.
+      #
+      # `gh release create` rather than a third-party action — it ships on the
+      # runner, needs no extra trust, and `--generate-notes` writes the commit
+      # list for us. The digest goes in the body because that is the thing
+      # anyone deploying this actually needs, and it is otherwise buried in a
+      # run summary that expires.
+      - name: Cut the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          V: ${{ steps.ref.outputs.version }}
+          IMAGE: ${{ steps.ref.outputs.image }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          notes=$(mktemp)
+          {
+            echo "### Image"
+            echo
+            echo '```'
+            echo "$IMAGE:$V@$DIGEST"
+            echo '```'
+            echo
+            echo "Multi-arch: \`linux/amd64\`, \`linux/arm64\`."
+            echo
+            echo "Pin by digest — a tag can be moved, a digest cannot, so what"
+            echo "runs is what was built here."
+          } > "$notes"
+
+          # Idempotent on purpose: a re-run via workflow_dispatch after a
+          # half-failed release must update the release, not die on "already
+          # exists" and leave the notes describing the older image.
+          if gh release view "$V" >/dev/null 2>&1; then
+            gh release edit "$V" --notes-file "$notes" --latest
+          else
+            gh release create "$V" --title "$V" --notes-file "$notes" \
+              --generate-notes --latest
+          fi

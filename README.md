@@ -20,6 +20,31 @@ Agent:  Recorded both as static. They were not in the document, and .231/.232
 
 That is a real exchange, shortened. The person never opened the sheet.
 
+## What it looks like
+
+**One screen per VLAN** — every device, how it holds its address, and which
+clients are on a randomised MAC (a DHCP reservation on one of those silently
+stops applying). The panel on the right is what is genuinely free to hand out.
+
+![A VLAN tab: device table, free-address panel, randomised-MAC pills](docs/images/screenshot-vlan.png)
+
+**One table for everything**, when you have an address in your hand and do not
+know which segment owns it. The amber rows are addresses **no device owns** —
+a virtual IP, a load-balancer pool. Nothing answers for them during a
+failover, which is how they get handed out twice.
+
+![The All tab: every VLAN in one table, with reserved addresses marked](docs/images/screenshot-all.png)
+
+**Who can reach whom.** A network with no firewall rules looks identical to a
+segmented one until something draws this. `isolated` here is enforced by the
+gateway rather than by a rule, so it appears in no rule list at all — and an
+audit that only reads rules reports the segment as wide open.
+
+![The firewall matrix: VLAN-to-VLAN reachability, with isolation shown](docs/images/screenshot-firewall.png)
+
+*(Screenshots use invented data — the addresses are examples and the MACs are
+from the range RFC 7042 reserves for documentation.)*
+
 ## Get started
 
 **1. Run it.**

@@ -1021,12 +1021,12 @@ function renderFirewall() {
   main.append(matrixBox);
   main.append(el("div", { class: "matrix-legend" },
     el("b", {}, "isolated"),
-    " = UniFi Network Isolation is on for that source network. It cannot reach any "
+    " = network isolation is on for that source network. It cannot reach any "
     + "other local network, and this is enforced by the gateway rather than by a "
     + "rule — so it shows up in no rule list, and a rules-only audit will wrongly "
     + "report the segment as wide open. ",
     el("br", {}),
-    "“no rule” means whatever the router defaults to - which on most UniFi setups is ",
+    "“no rule” means whatever the router defaults to - which is commonly ",
     el("span", { class: "mono" }, "allow"),
     ". Click a cell to add a rule for that pair."));
 
@@ -1063,7 +1063,7 @@ function buildMatrix(names) {
       if (srcVlan && srcVlan.isolated) {
         tr.append(el("td", {
           class: "drop isolated",
-          title: `${src} has UniFi Network Isolation on: it cannot reach any `
+          title: `${src} has network isolation on: it cannot reach any `
                + `other local network. Enforced by the gateway, not by a rule, `
                + `so it appears in no rule list.`,
         }, "isolated"));
