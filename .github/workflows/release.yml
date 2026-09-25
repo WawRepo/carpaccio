@@ -1,0 +1,101 @@
+# Cut a release: a tag becomes a multi-arch image on GHCR, and the fleet pulls
+# it. Replaces building locally and importing into containerd on all 19 nodes
+# by hand (HOME-460) — a release used to be 19 ssh commands, and a node that
+# had been missed could not run the app at all, failing with ErrImageNeverPull
+# which looks nothing like the real cause.
+#
+# THE PACKAGE IS PUBLIC AND THE REPOSITORY IS NOT. Those are separate settings
+# on GHCR, and keeping them separate is the whole point: the nodes pull
+# anonymously with no pull secret, while the source stays private and the
+# decision to publish it stays open and untaken.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  # Re-run a release by hand without moving a tag — for when a push to GHCR
+  # failed and the code is fine.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build (e.g. v0.8.0)"
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+  # Both are needed for build provenance. id-token lets the runner prove which
+  # workflow produced the image; without it the attestation step fails at the
+  # END of a long multi-arch build, which is an expensive way to find out.
+  id-token: write
+  attestations: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      # The tests gate the release. ci.yml runs them on every push too, but a
+      # tag can be pushed to a commit CI never saw, and "it was green on main"
+      # is not the same claim as "it is green at this tag".
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-groups
+      - run: uv run pytest -q
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ghcr wants a lowercase path; the owner is "WawRepo".
+      - name: Work out the image reference
+        id: ref
+        run: |
+          echo "image=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+          echo "version=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # Both arches, always. The fleet is 11 Raspberry Pis (arm64) and 8
+          # x86 boxes, and the pod has no arch selector, so a single-arch image
+          # fails on whichever half the scheduler happens to pick — which looks
+          # intermittent rather than broken.
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ steps.ref.outputs.image }}:${{ steps.ref.outputs.version }}
+            ${{ steps.ref.outputs.image }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Provenance + SBOM, same as ghcr.io/wawrepo/petty already carries.
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ steps.ref.outputs.image }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      # The digest is what the cluster pins. Printing it in the summary means
+      # the next step — updating terraform — is copy-paste rather than a
+      # separate `docker buildx imagetools inspect`.
+      - name: Summary
+        run: |
+          {
+            echo "## ${{ steps.ref.outputs.image }}:${{ steps.ref.outputs.version }}"
+            echo
+            echo '```hcl'
+            echo 'default = "${{ steps.ref.outputs.image }}:${{ steps.ref.outputs.version }}@${{ steps.push.outputs.digest }}"'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

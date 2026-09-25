@@ -4,32 +4,54 @@
 
 # cARPaccio
 
-**Every VLAN, every address, written down.**
+**Every VLAN, every address, written down — and kept written down by an agent.**
 
-cARPaccio is a home-network inventory sheet: a place to write your network
-down and keep it tidy. One screen per VLAN showing every device — fixed IPs
-with descriptions, DHCP clients with their MAC (and whether that MAC is
-randomised, which decides whether a reservation will ever stick), the DHCP
-ranges, and the firewall rules that separate the VLANs, including a
-VLAN-to-VLAN matrix of who can reach whom.
+cARPaccio is a document describing your network, with an HTTP API built for
+something else to maintain it. The sheet you can open in a browser is for
+*reading*. The API is the product.
 
 The name is styled **cARPaccio** — ARP, sliced thin.
 
+## How it is meant to be used
+
+You say what is wrong. The agent reads the document, works out what changed,
+and writes it. You do not open the sheet and you do not edit config.
+
+> **"I don't see the new host."**
+>
+> The agent read `GET /api/devices`, found two machines absent, checked
+> `GET /api/vlans/home/free` and saw their addresses were still being offered
+> as free to hand out — to machines already using them. It collected the MACs
+> over SSH, `POST`ed both as `assignment: static` with a note saying where the
+> address really lives, and reported back: two rows added, free count 36 → 34.
+>
+> That is a real session. The owner never opened the page.
+
+Everything below serves that loop. If you are wiring an agent up, you want
+**[SKILL.md](SKILL.md)** — it is written for the agent, not about it.
+
 ## Why it exists
 
-A UniFi controller knows a lot, but not everything, and it tells you nothing
-in one screen:
+**A network's real state is never in one system, and the parts no system
+knows are the parts that bite.**
 
-- It knows about **DHCP reservations**, but not about addresses hosts hold
-  **by their own configuration** (`assignment: static`) — a dozen cluster
-  nodes pinning 192.168.1.212–224 are invisible to it and are exactly the
-  addresses at risk of being handed out twice. Those entries are written here
-  by hand, because no API will ever report them.
-- It shows clients, but not **which of them sit on a randomised MAC** — the
-  locally-administered bit, computed from the address itself, not a vendor
-  list.
-- A network with **zero firewall rules** looks the same as a segmented one
-  until you draw the matrix.
+- **Addresses a host holds by its own configuration** (`assignment: static`)
+  appear in no controller, no lease table and no API. A dozen cluster nodes
+  pinning `192.168.1.212–224` are invisible — and they are exactly the
+  addresses at risk of being handed out twice.
+- **Addresses no device owns at all**: a virtual IP, a load-balancer pool.
+  ARP attributes them to whichever machine answered last, and during a
+  failover nothing answers, so "is this address free?" says **yes** about the
+  address your cluster's API lives on. That nearly happened here.
+- **Which clients sit on a randomised MAC** — the locally-administered bit,
+  computed from the address itself, not a vendor list. A DHCP reservation on
+  one of those silently stops applying.
+- **A network with zero firewall rules looks exactly like a segmented one**
+  until somebody draws the matrix.
+
+None of that is a gap in any particular vendor. It is the difference between
+what machines report and what is true, and closing it needs something that
+writes things down.
 
 ## How it works
 
@@ -115,6 +137,21 @@ docker compose up
 
 brings up MinIO, creates the versioned bucket, and serves the sheet on
 <http://localhost:8000>. First run shows an empty document — not an error.
+
+### Sources
+
+The document is the product; a source is a plugin that fills part of it.
+**UniFi is the one that ships**, because it is what the author runs — not
+because cARPaccio is a UniFi tool. Nothing in the schema, the API or the UI
+knows what a UniFi is; an importer is just something that produces a valid
+document and merges it.
+
+Whatever your network runs — OPNsense, Mikrotik, a pile of static leases, or
+nothing at all — you can fill this by hand, by agent, or by writing an
+importer against `GET /api/schema`. A row's `source` field records where it
+came from, and `merge()` never lets an import overwrite what a human or an
+agent wrote: hand-added `static` devices and the whole `reserved` section
+survive every re-import, by design.
 
 To fill it from a UniFi controller (UDM / UDM SE, UniFi OS on port 443):
 
@@ -304,6 +341,24 @@ firewall-policy list) with every MAC, address, name, token and coordinate
 replaced. The real data lives only in the owner's S3 bucket.
 
 ## Deploying to Kubernetes
+
+The chart is in `charts/carpaccio`. The image is published to **GHCR** by
+`.github/workflows/release.yml` when a `v*` tag is pushed: multi-arch
+(amd64 + arm64), with build provenance and an SBOM attached.
+
+```sh
+git tag v0.8.0 && git push origin v0.8.0
+# -> ghcr.io/wawrepo/carpaccio:v0.8.0  (+ :latest)
+```
+
+**The package is public even though this repository is not.** Those are two
+separate settings on GHCR, and separating them is deliberate: nodes pull
+anonymously with no pull secret, while the source stays private. Publishing
+the code is a different decision and has not been taken.
+
+Pin by digest in whatever deploys it — the workflow prints the exact line in
+its run summary. A tag can be moved; a digest cannot, so what runs is what was
+built and attested.
 
 **A release shows up on a normal reload.** Every `/static` link carries a
 fingerprint of the file's content (`app.js?v=<12 hex>`), so a changed file is
