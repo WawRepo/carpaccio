@@ -58,7 +58,81 @@ class UniFiClient:
             "device": self.get(f"{V1}/stat/device"),
             # Genuinely [] on a freshly-segmented network - handled, not assumed.
             "firewall_policies": self.get(f"{V2}/firewall-policies"),
+            # ZONES, without which the policies above are unreadable. A zone
+            # policy says zone_id -> zone_id; only this endpoint knows that
+            # "6ab844dddb9b7fedb9a3a12c" is Iot and which networks are in it.
+            "firewall_zones": self.get(f"{V2}/firewall/zone"),
         }
+
+
+# UniFi replaced per-network isolation with ZONE-BASED policies, and a zone is
+# not a VLAN: it is a bag of networks. Internal holds two, Iot holds one, and
+# several hold none at all. cARPaccio's matrix is VLAN x VLAN, so a policy has
+# to be projected down onto the VLANs its zones contain.
+#
+# THE PROJECTION IS LOSSY, AND IT LIES IN THE SAFE DIRECTION ON PURPOSE. A
+# policy scoped to an IP RANGE inside a zone — "192.168.1.213-254 may reach
+# Iot" — cannot be expressed as "home may reach iot". Answering that question
+# with a flat yes would be worse than useless: somebody would read the matrix,
+# believe the whole home VLAN can reach the cameras, and be wrong. So a
+# range-scoped endpoint keeps the zone name AND the qualifier, and the rule
+# reads "Internal (192.168.1.213-254)" rather than pretending to be simple.
+def _zone_lookup(raw: dict) -> tuple[dict, dict]:
+    """zone id -> name, and zone id -> the VLAN names inside it."""
+    zones = raw.get("firewall_zones") or []
+    names = {}
+    vlans = {}
+    networks = {n["_id"]: n["name"] for n in raw.get("networkconf", [])}
+    for z in zones:
+        zid = str(z.get("_id", ""))
+        if not zid:
+            continue
+        names[zid] = z.get("name", zid)
+        vlans[zid] = [networks[i] for i in (z.get("network_ids") or []) if i in networks]
+    return names, vlans
+
+
+def _endpoint_name(ep: dict | None, zone_names: dict, vlan_by_zone: dict) -> str:
+    """What one side of a policy actually matches, in words.
+
+    Falls back to the zone id rather than to "any": an unknown zone is a thing
+    we could not name, and calling it "any" would turn a specific rule into a
+    universal one — the single most dangerous mistake this file can make.
+    """
+    if not ep:
+        return "any"
+    zid = str(ep.get("zone_id", ""))
+    label = zone_names.get(zid, zid or "any")
+
+    # NAME THE VLANS, NOT THE ZONE, whenever the zone contains any — and this
+    # is what makes the matrix work rather than merely read nicely.
+    #
+    # The matrix asks "can home reach iot", VLAN against VLAN. A rule whose
+    # source says "Internal" answers nothing, because no VLAN is called that,
+    # and the cell falls through to "no rule" — which renders a BLOCKED pair as
+    # open. That is the exact failure this whole file exists to prevent, so the
+    # rule names the members instead: Internal becomes "home, guest".
+    #
+    # A zone with no VLANs in it (External holds three WANs, Gateway holds
+    # nothing) keeps its zone name. There is no VLAN to match, and inventing
+    # one would be worse than showing the truth.
+    members = vlan_by_zone.get(zid) or []
+    if members:
+        label = ", ".join(sorted(members))
+
+    target = str(ep.get("matching_target", "ANY")).upper()
+    if target not in ("ANY", ""):
+        detail = (
+            ep.get("ips")
+            or ep.get("ip_group_id")
+            or ep.get("network_ids")
+            or ep.get("matching_target_type")
+            or target
+        )
+        if isinstance(detail, list):
+            detail = ", ".join(str(x) for x in detail[:3])
+        label = f"{label} ({detail})"
+    return label
 
 
 def parse(raw: dict) -> dict:
@@ -156,6 +230,8 @@ def parse(raw: dict) -> dict:
         for d in raw["device"]
     ]
 
+    zone_names, vlan_by_zone = _zone_lookup(raw)
+
     firewall_rules = [
         {
             "id": str(p.get("_id", p.get("id", ""))),
@@ -163,12 +239,12 @@ def parse(raw: dict) -> dict:
             "action": {"ALLOW": "allow", "BLOCK": "drop", "REJECT": "reject"}.get(
                 str(p.get("action", "")).upper(), "drop"
             ),
-            "src": str(p.get("source", {}).get("network_id", "any")),
-            "dst": str(p.get("destination", {}).get("network_id", "any")),
+            "src": _endpoint_name(p.get("source"), zone_names, vlan_by_zone),
+            "dst": _endpoint_name(p.get("destination"), zone_names, vlan_by_zone),
             "protocol": p.get("protocol", "any"),
             "ports": "",
             "enabled": bool(p.get("enabled", True)),
-            "description": p.get("description", ""),
+            "description": p.get("description") or "",
         }
         for p in raw["firewall_policies"]
     ]

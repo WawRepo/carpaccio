@@ -996,10 +996,33 @@ function dhcpRow(v) {
 
 /* ---------- firewall: matrix first, then the rule sheet ---------- */
 
+/* Does one side of a rule apply to this VLAN?
+ *
+ * A side is no longer always a single VLAN name. Zone-based firewalls (see the
+ * importer) name every VLAN a zone contains, so "home, guest" is one rule that
+ * covers two VLANs — and a rule scoped to part of a zone carries a qualifier
+ * the importer refuses to drop: "home, guest (192.168.1.213-254)".
+ *
+ * THE QUALIFIER IS STRIPPED FOR MATCHING AND KEPT FOR READING, and that is a
+ * deliberate, lossy choice. A rule that only lets .213-.254 through still
+ * matches the whole `home` row here, because the alternative — ignoring it —
+ * would leave the pair reading "no rule" and call a firewalled path open. The
+ * matrix answers "is there a rule about this pair"; the rule list below it is
+ * where the exact scope lives, and the cell's tooltip names the rule so the
+ * jump is one glance. */
+function sideMatches(side, vlan) {
+  if (side === "any") return true;
+  return String(side)
+    .replace(/\s*\([^)]*\)/g, "")   // drop "(192.168.1.213-254)"
+    .split(",")
+    .map((x) => x.trim())
+    .includes(vlan);
+}
+
 function firstMatch(src, dst) {
   for (const r of doc.firewall_rules) {
     if (r.enabled === false) continue; // absent = enabled, matching the schema's optional field
-    if ((r.src === src || r.src === "any") && (r.dst === dst || r.dst === "any")) return r;
+    if (sideMatches(r.src, src) && sideMatches(r.dst, dst)) return r;
   }
   return null;
 }
@@ -1076,6 +1099,18 @@ function buildMatrix(names) {
       // fact isolated: the tool reported real segmentation as missing, which
       // is the worst answer it could give, because it invites someone to
       // "fix" a wall that is already there.
+      //
+      // THAT SWITCH IS NO LONGER THE ONLY MECHANISM (HOME-467). Newer UniFi
+      // does this with ZONE-BASED FIREWALL POLICIES instead, and turns the
+      // per-network toggle OFF when it does — measured on this estate: iot
+      // went to network_isolation_enabled=false while the zone matrix still
+      // read Internal -> Iot: Block All, across 85 policies.
+      //
+      // So `isolated` false no longer means "open". It means "not isolated BY
+      // THE TOGGLE", and the rules below are what decide. The importer maps
+      // zone policies onto VLAN pairs now, so those rules exist here. If both
+      // are silent the cell still says "no rule" — the honest answer rather
+      // than a guess in either direction.
       const srcVlan = doc.vlans.find((v) => v.name === src);
       if (srcVlan && srcVlan.isolated) {
         tr.append(el("td", {
@@ -1123,7 +1158,16 @@ function addRule(src, dst) {
 }
 
 function ruleRow(r, names) {
-  const opts = [...names, "any"];
+  // THE OPTION LIST MUST CONTAIN THE ROW'S OWN VALUE, or the select silently
+  // renders its first option instead — and a dropdown showing "home" for a
+  // rule whose source is "guest, home (192.168.1.213-254)" is not a cosmetic
+  // problem: it is the UI stating a firewall scope that does not exist, in a
+  // table people read to answer exactly that question.
+  //
+  // Imported zone rules carry values no VLAN list can predict — several VLANs
+  // joined, sometimes with an IP qualifier — so the current value is folded in
+  // rather than assumed to be there.
+  const opts = [...new Set([...names, "any", r.src, r.dst].filter(Boolean))];
   // Editing a rule repaints only the matrix above; the row itself already
   // shows the new value (it is the input), so rebuilding it would just
   // throw away focus.

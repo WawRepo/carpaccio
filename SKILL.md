@@ -157,6 +157,11 @@ is no answer, `reason` says why in words.
   per-network isolation toggle that appears in no rule table. Check the VLAN's
   `isolated` flag before reporting a network as unsegmented — telling someone
   to rebuild a wall that is already standing is worse than saying nothing.
+  Both mechanisms can be live on one controller at once, on different VLANs.
+- **A rule's side can name several VLANs.** Newer controllers write policies
+  between **zones**, and a zone holds many VLANs, so `src` may read
+  `guest, home` or carry an address qualifier. Match a side by splitting on
+  commas, never by string equality with one VLAN name.
 - **An IMPORTED VLAN cannot be renamed here** (409) — one whose `source` is not
   `manual`. Its name is the merge key on
   re-import; renaming would duplicate the segment. Rename it at the source.

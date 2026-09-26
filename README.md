@@ -36,9 +36,10 @@ failover, which is how they get handed out twice.
 ![The All tab: every VLAN in one table, with reserved addresses marked](docs/images/screenshot-all.png)
 
 **Who can reach whom.** A network with no firewall rules looks identical to a
-segmented one until something draws this. `isolated` here is enforced by the
-gateway rather than by a rule, so it appears in no rule list at all — and an
-audit that only reads rules reports the segment as wide open.
+segmented one until something draws this. A segment can be closed by a rule,
+or by an `isolated` flag the gateway enforces without writing any rule — so
+this matrix reads both, and an audit that only reads rules calls a closed
+segment wide open.
 
 ![The firewall matrix: VLAN-to-VLAN reachability, with isolation shown](docs/images/screenshot-firewall.png)
 
