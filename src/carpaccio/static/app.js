@@ -577,10 +577,10 @@ function reservedMatchesFilters(r) {
 function allReservedRow(r) {
   const tr = el("tr", { class: "reserved-row" });
   const span = r.ip_end ? `${r.ip} – ${r.ip_end}` : (r.ip || "");
-  tr.append(el("td", { class: "vlan-col" }, "—"));
-  tr.append(el("td", {}, r.name || el("span", { class: "hint" }, "unnamed")));
-  tr.append(el("td", { class: "mono" }, span));
-  tr.append(el("td", {}, el("span", {
+  tr.append(el("td", { class: "vlan-col", "data-label": "VLAN" }, "—"));
+  tr.append(el("td", { "data-label": "Description" }, r.name || el("span", { class: "hint" }, "unnamed")));
+  tr.append(el("td", { class: "mono", "data-label": "IP" }, span));
+  tr.append(el("td", { "data-label": "Assignment" }, el("span", {
     class: "pill reserved",
     title: "Not a device: an address no machine owns, so no API will ever "
       + "report it. Excluded from every free-address answer. Edit it on the "
@@ -588,9 +588,14 @@ function allReservedRow(r) {
   }, "reserved")));
   // MAC, randomised?, hostname, link, active - none of them mean anything
   // for an address with no machine behind it. Blank, not "unknown".
-  for (let i = 0; i < 5; i += 1) tr.append(el("td", {}, ""));
-  tr.append(el("td", {}, r.notes || ""));
-  tr.append(el("td", {}, el("span", { class: "hint" }, "DHCP tab")));
+  // MAC, randomised?, hostname, link, active — meaningless for an address with
+  // no machine behind it. `blank-cell` lets the phone layout drop them entirely
+  // rather than print five empty labels.
+  for (const lbl of ["MAC", "Random MAC?", "Hostname", "Link", "Active"]) {
+    tr.append(el("td", { class: "blank-cell", "data-label": lbl }, ""));
+  }
+  tr.append(el("td", { "data-label": "Notes" }, r.notes || ""));
+  tr.append(el("td", { class: "row-actions" }, el("span", { class: "hint" }, "DHCP tab")));
   return tr;
 }
 
@@ -611,7 +616,7 @@ function renderAll() {
       // pushed on the front here rather than threaded through it, so the
       // two tables cannot drift apart.
       const tr = deviceRow(row);
-      tr.insertBefore(el("td", { class: "vlan-col" }, row.vlan || ""), tr.firstChild);
+      tr.insertBefore(el("td", { class: "vlan-col", "data-label": "VLAN" }, row.vlan || ""), tr.firstChild);
       return tr;
     }));
     const total = doc.devices.length + (doc.reserved || []).length;
@@ -803,17 +808,29 @@ function activeCell(d) {
   }, el("div", { class: "mono" }, seen.date), el("div", { class: "ago" }, seen.ago));
 }
 
+/* Every cell carries the name of its column. On a phone the table stops being
+ * a table (see the media query in style.css) and each cell prints its own
+ * label, because a stacked row with no headers is a list of anonymous values.
+ *
+ * Set HERE rather than derived from the header row: a derived label would be
+ * silently wrong the moment a column is inserted, and the failure would be a
+ * wrong word next to a right value — worse than no word. */
+function labelled(label, cell) {
+  cell.setAttribute("data-label", label);
+  return cell;
+}
+
 function deviceRow(d) {
   const tr = el("tr", {
     class: (d.active ? "" : "inactive")
       + (netcalc.deviceIsEmpty(d) ? " row-empty" : ""),
   });
-  tr.append(textCell(d, "name", { placeholder: "describe it" }));
-  tr.append(textCell(d, "ip", { mono: true, placeholder: "0.0.0.0" }));
-  tr.append(selectCell(d, "assignment", ASSIGNMENTS));
-  const macTd = textCell(d, "mac", { mono: true, placeholder: "aa:bb:cc:dd:ee:ff" });
+  tr.append(labelled("Description", textCell(d, "name", { placeholder: "describe it" })));
+  tr.append(labelled("IP", textCell(d, "ip", { mono: true, placeholder: "0.0.0.0" })));
+  tr.append(labelled("Assignment", selectCell(d, "assignment", ASSIGNMENTS)));
+  const macTd = labelled("MAC", textCell(d, "mac", { mono: true, placeholder: "aa:bb:cc:dd:ee:ff" }));
   tr.append(macTd);
-  const randTd = el("td", {});
+  const randTd = el("td", { "data-label": "Random MAC?" });
   const paintRand = () => randTd.replaceChildren(
     macIsRandomised(d.mac)
       ? el("span", { class: "pill rand", title: "Locally-administered bit set: this address can change when the device rejoins. A DHCP reservation on it will not stick." }, "randomised")
@@ -823,11 +840,11 @@ function deviceRow(d) {
   // steal focus from the input on every keystroke.
   macTd.querySelector("input").addEventListener("input", paintRand);
   tr.append(randTd);
-  tr.append(el("td", { class: "mono" }, d.hostname || ""));
-  tr.append(el("td", {}, d.wired ? "wired" : "wifi"));
-  tr.append(activeCell(d));
-  tr.append(textCell(d, "notes"));
-  tr.append(el("td", {}, el("button", {
+  tr.append(el("td", { class: "mono", "data-label": "Hostname" }, d.hostname || ""));
+  tr.append(el("td", { "data-label": "Link" }, d.wired ? "wired" : "wifi"));
+  tr.append(labelled("Active", activeCell(d)));
+  tr.append(labelled("Notes", textCell(d, "notes")));
+  tr.append(el("td", { class: "row-actions" }, el("button", {
     class: "small danger",
     onclick: () => {
       doc.devices.splice(doc.devices.indexOf(d), 1);
