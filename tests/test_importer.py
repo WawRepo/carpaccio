@@ -330,11 +330,20 @@ def _raw(policies):
 
 def test_a_zone_policy_is_named_not_flattened_to_any():
     """The bug itself: zone_id, not network_id, and never a silent "any"."""
-    doc = parse(_raw([{
-        "_id": "p1", "name": "Block All Traffic", "action": "BLOCK", "enabled": True,
-        "source": {"zone_id": "z-int", "matching_target": "ANY"},
-        "destination": {"zone_id": "z-iot", "matching_target": "ANY"},
-    }]))
+    doc = parse(
+        _raw(
+            [
+                {
+                    "_id": "p1",
+                    "name": "Block All Traffic",
+                    "action": "BLOCK",
+                    "enabled": True,
+                    "source": {"zone_id": "z-int", "matching_target": "ANY"},
+                    "destination": {"zone_id": "z-iot", "matching_target": "ANY"},
+                }
+            ]
+        )
+    )
     r = doc["firewall_rules"][0]
     assert r["action"] == "drop"
     # A zone is named for the VLANS IT CONTAINS, not for itself. The matrix
@@ -349,15 +358,24 @@ def test_an_ip_scoped_policy_keeps_its_qualifier():
     """The dangerous case. "192.168.1.213-254 may reach iot" must NOT be
     rendered as "Internal may reach iot" — somebody would read that as the
     whole VLAN and be wrong about their own firewall."""
-    doc = parse(_raw([{
-        "_id": "p2", "name": "cluster", "action": "ALLOW", "enabled": True,
-        "source": {
-            "zone_id": "z-int",
-            "matching_target": "IP",
-            "ips": ["192.0.2.213-192.0.2.254"],
-        },
-        "destination": {"zone_id": "z-iot", "matching_target": "ANY"},
-    }]))
+    doc = parse(
+        _raw(
+            [
+                {
+                    "_id": "p2",
+                    "name": "cluster",
+                    "action": "ALLOW",
+                    "enabled": True,
+                    "source": {
+                        "zone_id": "z-int",
+                        "matching_target": "IP",
+                        "ips": ["192.0.2.213-192.0.2.254"],
+                    },
+                    "destination": {"zone_id": "z-iot", "matching_target": "ANY"},
+                }
+            ]
+        )
+    )
     src = doc["firewall_rules"][0]["src"]
     assert src.startswith("home, lab")
     assert "192.0.2.213-192.0.2.254" in src
@@ -366,11 +384,20 @@ def test_an_ip_scoped_policy_keeps_its_qualifier():
 def test_an_unknown_zone_is_never_called_any():
     """Falling back to "any" would turn one specific rule into a universal
     one, which is the single most dangerous thing this parser can do."""
-    doc = parse(_raw([{
-        "_id": "p3", "name": "mystery", "action": "BLOCK", "enabled": True,
-        "source": {"zone_id": "z-does-not-exist", "matching_target": "ANY"},
-        "destination": {"zone_id": "z-iot", "matching_target": "ANY"},
-    }]))
+    doc = parse(
+        _raw(
+            [
+                {
+                    "_id": "p3",
+                    "name": "mystery",
+                    "action": "BLOCK",
+                    "enabled": True,
+                    "source": {"zone_id": "z-does-not-exist", "matching_target": "ANY"},
+                    "destination": {"zone_id": "z-iot", "matching_target": "ANY"},
+                }
+            ]
+        )
+    )
     assert doc["firewall_rules"][0]["src"] == "z-does-not-exist"
 
 
@@ -384,9 +411,18 @@ def test_a_zone_with_no_vlans_keeps_its_own_name():
     """External holds three WANs and no VLAN; Gateway holds nothing at all.
     There is no VLAN to name, and inventing one would be worse than showing
     the truth — the matrix simply will not match these, which is correct."""
-    doc = parse(_raw([{
-        "_id": "p4", "name": "from the internet", "action": "BLOCK", "enabled": True,
-        "source": {"zone_id": "z-ext", "matching_target": "ANY"},
-        "destination": {"zone_id": "z-iot", "matching_target": "ANY"},
-    }]))
+    doc = parse(
+        _raw(
+            [
+                {
+                    "_id": "p4",
+                    "name": "from the internet",
+                    "action": "BLOCK",
+                    "enabled": True,
+                    "source": {"zone_id": "z-ext", "matching_target": "ANY"},
+                    "destination": {"zone_id": "z-iot", "matching_target": "ANY"},
+                }
+            ]
+        )
+    )
     assert doc["firewall_rules"][0]["src"] == "External"
