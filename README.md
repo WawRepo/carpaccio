@@ -58,9 +58,16 @@ docker compose up
 MinIO, a versioned bucket, and the sheet on <http://localhost:8000>. The first
 screen is empty — that is correct, not an error. No auth locally.
 
-**2. Give your agent the skill.** Copy [`SKILL.md`](SKILL.md) to wherever your
-agent reads skills from — for Claude Code that is
-`~/.claude/skills/carpaccio/SKILL.md`, or `.claude/skills/` inside a project.
+**2. Give your agent the skill.** The quickest way is to install nothing — just
+point the agent at the file:
+
+> Read `SKILL.md` in this repo, then do what it says.
+
+It works with a URL too, if your agent can fetch one. Copying the file only
+buys you one thing: the agent loads it by itself, without being told each time.
+To get that, put [`SKILL.md`](SKILL.md) wherever your agent reads skills from —
+for Claude Code that is `~/.claude/skills/carpaccio/SKILL.md`, or
+`.claude/skills/` inside a project.
 
 **3. Tell it two things: where cARPaccio is, and where the truth lives.**
 
