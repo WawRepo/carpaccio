@@ -20,6 +20,8 @@ client uplink MAC) - while replacing everything that describes a real network:
   WAN names would name the owner's ISPs, so they become wan-NN.
 - Tokens, serials, Mongo ids, UUIDs, IPv6 addresses, the PPPoE username,
   802.1X identities, geo data and ISP names are all regenerated or blanked.
+  Any hex string of 12 characters or more is regenerated whatever its name -
+  matching on shape, not on a list of field names or lengths we have seen.
 
 Deterministic (fixed seed): rerunning over the same input yields the same
 output. Usage:
@@ -38,8 +40,13 @@ FILES = ["networkconf.json", "user.json", "sta.json", "device.json"]
 
 MAC_RE = re.compile(r"\b[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}\b")
 IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-HEX24_RE = re.compile(r"^[0-9a-f]{24}$")
-HEX32_RE = re.compile(r"^[0-9a-fA-F]{32}$")
+# ANY long hex string is regenerated, not only the lengths we happened to see.
+# The first version of this listed the lengths it knew about - 24 (Mongo id),
+# 32 (UUIDs and guest tokens) - and a device's `syslog_key` is 64, so nine real
+# keys went straight through the sanitiser and into a committed fixture. A
+# whitelist of lengths is the wrong shape for "remove every secret": the next
+# firmware adds a field of a length nobody listed. Match on the SHAPE instead.
+HEX_RE = re.compile(r"^[0-9a-fA-F]{12,}$")
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 # Host numbers that keep their value inside 192.168.0.0/16 so the fixtures
@@ -121,7 +128,7 @@ class Sanitiser:
     def map_stringlike(self, value: str) -> str:
         value = MAC_RE.sub(self.map_mac, value)
         value = IPV4_RE.sub(self.map_ipv4, value)
-        for pattern in (HEX24_RE, HEX32_RE, UUID_RE):
+        for pattern in (HEX_RE, UUID_RE):
             if pattern.match(value):
                 if value not in self.hexes:
                     self.hexes[value] = "".join(
