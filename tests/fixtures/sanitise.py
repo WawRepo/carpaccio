@@ -22,6 +22,10 @@ client uplink MAC) - while replacing everything that describes a real network:
   802.1X identities, geo data and ISP names are all regenerated or blanked.
   Any hex string of 12 characters or more is regenerated whatever its name -
   matching on shape, not on a list of field names or lengths we have seen.
+- Any field whose NAME contains key/token/secret/passw/psk/credential is
+  emptied outright. The key stays so the parser sees the same shape; the
+  value goes, because a fixture never needs one and a plausible fake still
+  trips every secret scanner a contributor runs.
 
 Deterministic (fixed seed): rerunning over the same input yields the same
 output. Usage:
@@ -52,6 +56,9 @@ UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 # Host numbers that keep their value inside 192.168.0.0/16 so the fixtures
 # still read like a network: gateway, DHCP range boundaries, broadcast.
 KEEP_HOSTS = {0, 1, 6, 190, 254, 255}
+
+# Field names that hold a secret, whatever the value looks like.
+SECRET_KEY_RE = re.compile(r"(key|token|secret|passw|psk|credential)", re.I)
 
 NAME_KEYS = {"name", "hostname", "last_uplink_name", "uplink_device_name"}
 # Only the LAN names stay: they are generic labels the tests and README use.
@@ -160,6 +167,14 @@ class Sanitiser:
             return [self.transform(key, v) for v in value]
         if not isinstance(value, str) or value == "":
             return value
+
+        # A secret-shaped FIELD NAME is emptied outright, before anything else.
+        # A fixture needs the key to exist so the parser sees the same shape; it
+        # never needs a value, and a regenerated 64-character hex string still
+        # trips every secret scanner a contributor runs. Empty is both safer
+        # and quieter than plausible.
+        if SECRET_KEY_RE.search(key) and not key.endswith("_id"):
+            return ""
 
         if key in NAME_KEYS:
             if value in NETWORK_NAMES:

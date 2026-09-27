@@ -5470,7 +5470,7 @@
       "guest-num_sta": 0,
       "guest-wlan-num_sta": 0,
       "guest_kicks": 0,
-      "guest_token": "fa1f1b21ba45151bba2a4ae10d9df777",
+      "guest_token": "",
       "gw_caps": {
         "caps": {
           "bufferbloat_detector": true,
