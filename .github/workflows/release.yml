@@ -4,10 +4,11 @@
 # had been missed could not run the app at all, failing with ErrImageNeverPull
 # which looks nothing like the real cause.
 #
-# THE PACKAGE IS PUBLIC AND THE REPOSITORY IS NOT. Those are separate settings
-# on GHCR, and keeping them separate is the whole point: the nodes pull
-# anonymously with no pull secret, while the source stays private and the
-# decision to publish it stays open and untaken.
+# THE PACKAGE AND THE REPOSITORY ARE SEPARATE SETTINGS on GHCR, and making the
+# repo public does NOT make the package public. The nodes pull anonymously with
+# no pull secret, so the package has to be public in its own right - and that
+# switch exists only in the web UI. There is no REST API for package visibility
+# on a personal account, so no workflow step here can do it for you.
 name: release
 
 on:
