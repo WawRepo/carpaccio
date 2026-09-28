@@ -1465,10 +1465,106 @@ async function reload() {
   const body = await resp.json();
   doc = body.document;
   version = body.version;
+  markClean();          // the page now matches the server again, by definition
   hideBanner();
   setStatus("reloaded", "ok");
   render();
 }
 
-$("#save").addEventListener("click", save);
+/* ---------- download / upload ---------- */
+
+/* Download the document the SERVER holds, not the object in this tab.
+ *
+ * Those differ the moment anyone types a character, and a backup that
+ * silently includes half-finished edits is worse than no backup: it looks
+ * authoritative and is not. So this is a plain link to /api/export, and an
+ * unsaved page says so first. */
+function download() {
+  if (dirtySinceLoad()) {
+    setStatus("unsaved edits", "err");
+    showBanner([
+      el("strong", {}, "You have edits that are not saved."),
+      el("div", {}, "Download gives you what the server holds, which does not include them. " +
+        "Press Save first, or download anyway to get the last saved version."),
+      el("button", { onclick: () => { hideBanner(); doDownload(); } }, "Download the saved version"),
+    ]);
+    return;
+  }
+  doDownload();
+}
+
+function doDownload() {
+  const a = el("a", { href: "/api/export", download: "" });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setStatus("downloaded", "ok");
+  setTimeout(() => setStatus(""), 3000);
+}
+
+/* A snapshot of the document as it was when the page loaded or last saved.
+ * Compared by value, because every keystroke mutates `doc` in place and there
+ * is no other way to know whether anything actually changed. */
+let clean = JSON.stringify(doc);
+function markClean() { clean = JSON.stringify(doc); }
+function dirtySinceLoad() { return JSON.stringify(doc) !== clean; }
+
+async function uploadFile(file) {
+  hideBanner();
+  setStatus("importing…");
+  const form = new FormData();
+  form.append("file", file);
+  const resp = await fetch("/api/import?version=" + encodeURIComponent(version), {
+    method: "POST",
+    body: form,
+  });
+  const body = await resp.json().catch(() => ({}));
+  if (resp.ok) {
+    setStatus("imported", "ok");
+    await reload();
+    showBanner([
+      el("strong", {}, "Imported " + file.name + "."),
+      el("div", {}, Object.entries(body.imported || {})
+        .map(([k, n]) => n + " " + k).join(", ")),
+      el("div", {}, "The version you had before is still in the History tab."),
+    ]);
+    return;
+  }
+  if (resp.status === 422) {
+    setStatus("invalid file", "err");
+    showBanner([
+      el("strong", {}, "Not imported - that file is not a valid cARPaccio document."),
+      el("ul", {}, ...(body.errors || []).map((e) => el("li", {}, e))),
+      el("div", {}, "Nothing was changed."),
+    ]);
+  } else if (resp.status === 409) {
+    setStatus("conflict", "err");
+    showBanner([
+      el("strong", {}, "Not imported - someone else saved while this page was open."),
+      el("ul", {}, ...(body.changes || []).map((c) => el("li", {}, c))),
+      el("button", { onclick: reload }, "Reload, then try the import again"),
+    ]);
+  } else {
+    setStatus("error " + resp.status, "err");
+    showBanner([el("strong", {}, "Import failed: " + (body.detail || resp.statusText))]);
+  }
+}
+
+$("#save").addEventListener("click", async () => { await save(); markClean(); });
+$("#download").addEventListener("click", download);
+$("#upload").addEventListener("click", () => {
+  /* Replacing every VLAN and every device is not an "are you sure?" moment,
+   * it is a "say what you are about to lose" moment. */
+  const counts = ["vlans", "devices", "firewall_rules"]
+    .map((k) => (doc[k] || []).length + " " + k.replace("_", " ")).join(", ");
+  if (!confirm("Upload REPLACES everything in this document (" + counts + ").\n\n" +
+               "The current version stays in History and can be rolled back.\n\n" +
+               "Continue?")) return;
+  $("#upload-file").click();
+});
+$("#upload-file").addEventListener("change", (e) => {
+  const file = e.target.files[0];
+  e.target.value = "";          // so picking the SAME file twice fires again
+  if (file) uploadFile(file);
+});
 render();

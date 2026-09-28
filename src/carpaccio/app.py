@@ -14,6 +14,7 @@ re-applying the change to a document another writer just reshaped, which is
 last-writer-wins wearing a different hat. The caller re-reads and decides.
 """
 
+import datetime
 import hashlib
 import json
 import uuid
@@ -257,6 +258,119 @@ def create_app(store: Store | None = None) -> FastAPI:
                 status_code=409,
             )
         return JSONResponse({"version": new_version}, headers={"ETag": new_version})
+
+    # ------------------------------------------------------- export / import
+
+    @app.get("/api/export")
+    def api_export() -> Response:
+        """The whole document as a file to keep.
+
+        The body is the PLAIN document - not the {version, document} envelope
+        that GET /api/network returns. That is deliberate: a file people keep
+        for a year should validate against /api/schema on its own and go
+        straight back in through import, without anyone having to strip a
+        wrapper first. The version token would be stale by then anyway, so
+        putting it IN the file would only invite someone to send it back.
+
+        What is worth knowing about the export travels in headers, where it
+        cannot break validation: ETag carries the version it was taken from.
+        """
+        doc, current = get_store().load()
+        stamp = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d")
+        body = json.dumps(doc, indent=2, sort_keys=True) + "\n"
+        return Response(
+            content=body,
+            media_type="application/json",
+            headers={
+                "Content-Disposition": f'attachment; filename="carpaccio-{stamp}.json"',
+                "ETag": current,
+                "X-Carpaccio-Version": current,
+            },
+        )
+
+    @app.post("/api/import")
+    async def api_import(request: Request) -> JSONResponse:
+        """Replace the whole document from a file.
+
+        REPLACE, not merge. Merging two inventories without being told which
+        one is right is how you end up with two rows for one machine and no
+        way to tell which is live. The old document is not lost - every save
+        is a version, so History has it and can roll back.
+
+        Takes either a JSON body (the plain document, or the {version,
+        document} envelope) or a multipart upload under `file`, which is what
+        the browser sends. Either way the version token is REQUIRED, from the
+        `version` query parameter or an If-Match header: an import is the most
+        destructive thing this API does, and it goes through the same lock as
+        every other write rather than around it.
+        """
+        ctype = request.headers.get("content-type", "")
+        if ctype.startswith("multipart/form-data"):
+            form = await request.form()
+            upload = form.get("file")
+            if upload is None or not hasattr(upload, "read"):
+                return JSONResponse({"detail": "multipart body needs a `file` part"}, 400)
+            raw = await upload.read()
+        else:
+            raw = await request.body()
+
+        if not raw.strip():
+            return JSONResponse({"detail": "empty body - nothing to import"}, 400)
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            # Say WHERE it broke. "invalid json" on a 300KB file is useless.
+            return JSONResponse(
+                {
+                    "detail": f"that file is not valid JSON: {exc.msg}"
+                    f" (line {exc.lineno}, column {exc.colno})"
+                },
+                status_code=400,
+            )
+        if not isinstance(payload, dict):
+            return JSONResponse({"detail": "the file must contain a JSON object"}, 400)
+
+        # Accept an envelope too, so a file saved straight from GET
+        # /api/network also imports instead of failing validation on keys the
+        # schema has never heard of.
+        doc = payload.get("document") if isinstance(payload.get("document"), dict) else payload
+
+        errors = validation_errors(doc)
+        if errors:
+            return JSONResponse(
+                {
+                    "detail": "that file is not a valid cARPaccio document - nothing was imported",
+                    "errors": errors,
+                },
+                status_code=422,
+            )
+
+        version = request.query_params.get("version") or request.headers.get("if-match")
+        if not version:
+            return JSONResponse(
+                {
+                    "detail": "import needs the current version:"
+                    " ?version=<token from GET /api/network> or an If-Match"
+                    " header. Nothing was imported."
+                },
+                status_code=428,
+            )
+        try:
+            new_version = get_store().save(doc, expected_version=version)
+        except StaleVersion as stale:
+            return JSONResponse(
+                {
+                    "detail": "someone else saved since you read the version -"
+                    " reload and import again",
+                    "current_version": stale.current_version,
+                    "changes": stale.changes,
+                },
+                status_code=409,
+            )
+        counts = {k: len(v) for k, v in doc.items() if isinstance(v, list)}
+        return JSONResponse(
+            {"version": new_version, "imported": counts}, headers={"ETag": new_version}
+        )
 
     # --------------------------------------------------------------- history
 

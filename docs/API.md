@@ -23,6 +23,8 @@ retry on conflict: on a 409, re-read and redo.
 | `GET /api/network?version=<id>` | one historical version: `{version_id, historical, document}` (no lock token, on purpose) |
 | `PUT /api/network` | `{version, document}` — 409 on a stale version, 422 on an invalid document |
 | `GET /api/schema` | the JSON Schema the server validates with |
+| `GET /api/export` | the whole document as a file to keep — the PLAIN document, no envelope, so it validates on its own. The version it was taken from rides in `ETag` and `X-Carpaccio-Version` |
+| `POST /api/import?version=<token>` | replace everything from a file. JSON body or a multipart `file` part. 400 with the line and column on broken JSON, 422 on an invalid document, 428 without a version, 409 on a stale one |
 | `GET /api/history` | stored versions, newest first, each with a plain-English summary of what it changed |
 | `GET /api/{vlans,devices,wans,infrastructure,firewall_rules}` | one section plus the current version token |
 | `GET /api/vlans/{name}/free` | addresses safe to hand out on that VLAN: inside the subnet, outside the DHCP pool, not the gateway, not on any device or gear. Collapsed ranges plus a count; `reason` says why when there is no answer |
@@ -35,6 +37,22 @@ retry on conflict: on a 409, re-read and redo.
 | `POST /api/firewall_rules` | add a rule (an `id` is minted if absent) |
 | `PATCH /api/firewall_rules/{id}` | update one rule |
 | `DELETE /api/firewall_rules/{id}` | remove one rule |
+
+**Import replaces, it does not merge.** Merging two inventories without being
+told which one is right is how you get two rows for one machine and no way to
+tell which is live. Nothing is lost: every save is a version, so the document
+that was there is in `GET /api/history` and can be rolled back.
+
+**Import needs the version token**, from `?version=` or an `If-Match` header.
+It is the most destructive call here, so it goes through the same lock as
+every other write rather than around it:
+
+```bash
+V=$(curl -s $BASE/api/network | jq -r .version)
+curl -s $BASE/api/export -o backup.json
+curl -s -X POST "$BASE/api/import?version=$V" -F "file=@backup.json"
+# -> {"version": "...", "imported": {"vlans": 3, "devices": 118, ...}}
+```
 
 Two rules the API enforces rather than documents away:
 

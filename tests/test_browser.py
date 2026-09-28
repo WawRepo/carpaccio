@@ -148,7 +148,9 @@ def test_add_and_delete_keep_scroll_and_focus(tmp_path):
 <link rel="stylesheet" href="file://{STATIC}/style.css">
 <style>body {{ height: 100vh; }}</style>
 </head><body>
-<header><span id="status"></span><button id="save"></button></header>
+<header><span id="status"></span><button id="save"></button>
+<button id="download"></button><button id="upload"></button>
+<input id="upload-file" type="file" hidden></header>
 <div id="banner" class="banner hidden"></div>
 <nav id="tabs"></nav>
 <main id="content"></main>
@@ -215,3 +217,135 @@ def test_add_and_delete_keep_scroll_and_focus(tmp_path):
     # Firewall add focuses the new rule row.
     assert out["rule_focus_is_input"] is True
     assert out["rule_rows"] == 1
+
+
+# --------------------------------------------------- download / upload wiring
+
+SAVELOAD_SCRIPT = """
+const out = {};
+
+/* Watch what the page actually does, rather than trusting it: record every
+ * anchor click (Download) and every fetch (Upload) instead of mocking the
+ * functions under test. */
+const clicks = [];
+HTMLAnchorElement.prototype.click = function () { clicks.push(this.getAttribute("href")); };
+
+const calls = [];
+window.fetch = async (url, opts) => {
+  calls.push({ url: String(url), method: (opts || {}).method,
+               isForm: (opts || {}).body instanceof FormData });
+  return { ok: true, status: 200, json: async () => ({ imported: { vlans: 3 }, version: "v2" }) };
+};
+
+let confirmText = null;
+window.confirm = (t) => { confirmText = t; return true; };
+
+// ---- Download on a CLEAN page goes straight to /api/export ----------------
+document.getElementById("download").click();
+out.clean_download_href = clicks[0] || null;
+out.clean_download_banner = !document.getElementById("banner").classList.contains("hidden");
+
+// ---- Download with UNSAVED edits warns instead -----------------------------
+clicks.length = 0;
+/* A DEVICE row field, not the first input on the page - the filter box is an
+ * input too and changing it must NOT mark the document dirty. */
+const field = document.querySelector("tbody tr input");
+out.dirty_field_found = !!field;
+field.value = "edited-by-the-test";
+field.dispatchEvent(new Event("input", { bubbles: true }));
+out.doc_changed = JSON.stringify(doc).includes("edited-by-the-test");
+document.getElementById("download").click();
+out.dirty_download_clicked = clicks.length;
+out.dirty_download_banner = document.getElementById("banner").textContent;
+
+// ---- Upload names what is about to be lost, then posts multipart ----------
+document.getElementById("upload").click();
+out.confirm_text = confirmText;
+
+const input = document.getElementById("upload-file");
+const dt = new DataTransfer();
+dt.items.add(new File(['{"vlans":[]}'], "backup.json", { type: "application/json" }));
+input.files = dt.files;
+input.dispatchEvent(new Event("change", { bubbles: true }));
+
+// the upload is async; give the microtasks a turn before reporting
+setTimeout(() => {
+  out.upload_calls = calls.filter((c) => c.url.includes("/api/import"));
+  out.input_cleared = input.value === "";
+  const pre = document.createElement("pre");
+  pre.id = "test-results";
+  pre.textContent = JSON.stringify(out);
+  document.body.append(pre);
+}, 50);
+"""
+
+
+@pytest.mark.skipif(CHROME is None, reason="no Chrome/Chromium on this machine")
+def test_download_and_upload_do_the_right_thing(tmp_path):
+    doc_json = json.dumps(synthetic_doc()).replace("</", "<\\/")
+    harness = tmp_path / "saveload.html"
+    harness.write_text(
+        f"""<!doctype html>
+<html><head><meta charset="utf-8">
+<link rel="stylesheet" href="file://{STATIC}/style.css">
+</head><body>
+<header><span id="status"></span><button id="save"></button>
+<button id="download">Download</button><button id="upload">Upload</button>
+<input id="upload-file" type="file" hidden></header>
+<div id="banner" class="banner hidden"></div>
+<nav id="tabs"></nav>
+<main id="content"></main>
+<script id="document-data" type="application/json">{doc_json}</script>
+<script>window.CARPACCIO_VERSION = "test";</script>
+<script src="file://{STATIC}/netcalc.js"></script>
+<script src="file://{STATIC}/app.js"></script>
+<script>{SAVELOAD_SCRIPT}</script>
+</body></html>"""
+    )
+    proc = subprocess.run(
+        [
+            CHROME,
+            "--headless",
+            "--disable-gpu",
+            "--no-sandbox",
+            "--allow-file-access-from-files",
+            "--window-size=1400,800",
+            "--virtual-time-budget=4000",
+            "--dump-dom",
+            f"file://{harness}",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=90,
+        check=False,
+    )
+    marker = 'id="test-results">'
+    assert marker in proc.stdout, (
+        "harness produced no results - the page script crashed:\n" + proc.stdout[-2000:]
+    )
+    raw = proc.stdout.split(marker, 1)[1].split("</pre>", 1)[0]
+    raw = raw.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+    out = json.loads(raw)
+
+    # A clean page downloads without ceremony.
+    assert out["clean_download_href"] == "/api/export"
+    assert out["clean_download_banner"] is False
+
+    # THE point of the dirty check: a backup taken mid-edit looks
+    # authoritative and is not. The page must say so before handing one over.
+    assert out["dirty_download_clicked"] == 0, "downloaded silently while edits were unsaved"
+    assert "not saved" in out["dirty_download_banner"]
+
+    # Upload says what is about to be lost, in numbers.
+    assert "REPLACES" in out["confirm_text"]
+    assert "devices" in out["confirm_text"]
+
+    # ...and posts the file as multipart, carrying the lock token.
+    assert len(out["upload_calls"]) == 1
+    call = out["upload_calls"][0]
+    assert call["method"] == "POST"
+    assert call["isForm"] is True, "must be a multipart upload, not a JSON body"
+    assert "version=test" in call["url"]
+
+    # So that picking the SAME file twice fires again.
+    assert out["input_cleared"] is True

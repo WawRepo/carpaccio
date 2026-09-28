@@ -104,6 +104,18 @@ document only when changing many things at once. An optional
 An invalid document is **422** and the stored object is left untouched. **You
 cannot corrupt it with a bad write — you can only fail.** Write freely.
 
+**Taking a copy, and putting one back.** `GET /api/export` gives you the whole
+document as a plain file — no envelope, so it validates against `/api/schema`
+on its own and goes straight back in. `POST /api/import?version=<token>`
+replaces everything from such a file. It **replaces, it does not merge**: two
+inventories merged without being told which is right leave two rows for one
+machine and no way to tell which is live. Nothing is lost either way — the
+document that was there is still a version in `GET /api/history`.
+
+Use export before a big rewrite, and to carry a network from one instance to
+another. Do not use import to apply a small change; that is what the
+per-resource writes are for.
+
 ## What only a human or an agent can know
 
 These are the parts no controller reports, and the reason this tool exists.
