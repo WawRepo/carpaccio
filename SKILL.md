@@ -82,13 +82,20 @@ an answer from an unverified document sounds exactly like a verified one.
 
 ## The write contract, which is the whole API
 
-**Get the route list and the document model from the running server, not from
-here** — `GET /api/schema` is the schema it actually validates against, so it
-can never be out of date with the thing rejecting your write. The behaviour
-below is the part the schema does not describe:
+**Get the routes and the document model from the running server, not from
+here** — `GET /openapi.json` lists every route, and `GET /api/schema` is the
+schema writes are validated against (the document model only, no routes), so
+neither can be out of date with the thing rejecting your write. The behaviour
+below is the part they do not describe:
 
-1. Every read hands you a **version token**.
-2. Every write must present it.
+1. Every read hands you a **version token**: `GET /api/network` returns
+   `{"version": <token>, "document": {...}}`, and the same token is in its
+   `ETag` header.
+2. Writes present it:
+   - `PUT /api/network` — in the body: `{"version": <token>, "document": {...}}`.
+   - `POST /api/import` — `?version=<token>` or `If-Match: <token>`, required
+     (the server reads it by hand, so `/openapi.json` does not list it).
+   - per-resource writes — an optional `If-Match: <token>` (see below).
 3. A stale token is **409**, with a description of what changed.
 4. **There is no server-side retry.** On 409: re-read, redo, write again.
 
@@ -103,6 +110,14 @@ document only when changing many things at once. An optional
 
 An invalid document is **422** and the stored object is left untouched. **You
 cannot corrupt it with a bad write — you can only fail.** Write freely.
+
+**Who holds an address?** There is no lookup route. Read `GET /api/network`
+and search three places in `document`: `devices` (by `ip`), `infrastructure`,
+and `reserved` (an entry covers `ip` through `ip_end` when that is set). If a
+device row and a `reserved` entry claim the same address, report both: the
+reserved entry is what a human wrote down on purpose; the device row is often
+an old ARP or DHCP sighting (a VIP that answered from one node, for example).
+Do not delete either without saying so.
 
 **Taking a copy, and putting one back.** `GET /api/export` gives you the whole
 document as a plain file — no envelope, so it validates against `/api/schema`
