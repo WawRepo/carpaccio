@@ -77,19 +77,28 @@ committed here. The real data lives only in object storage.
 
 ## Deploying to Kubernetes
 
-The chart is in `charts/carpaccio`. The image is published to **GHCR** by
-`.github/workflows/release.yml` when a `v*` tag is pushed: multi-arch
-(amd64 + arm64), with build provenance and an SBOM attached.
+The chart is in `charts/carpaccio`. `.github/workflows/release.yml` publishes
+the image AND the chart to **GHCR** when a `v*` tag is pushed: the image
+multi-arch (amd64 + arm64), with build provenance and an SBOM attached; the
+chart at the same version, as an OCI artifact.
 
 ```sh
-git tag v0.8.0 && git push origin v0.8.0
-# -> ghcr.io/wawrepo/carpaccio:v0.8.0  (+ :latest)
+git tag v0.10.2 && git push origin v0.10.2
+# -> ghcr.io/wawrepo/carpaccio:v0.10.2  (+ :latest)
+# -> oci://ghcr.io/wawrepo/charts/carpaccio, version 0.10.2
+helm install carpaccio oci://ghcr.io/wawrepo/charts/carpaccio --version 0.10.2
 ```
 
-**The package is public even though this repository is not.** Those are two
-separate settings on GHCR, and separating them is deliberate: nodes pull
-anonymously with no pull secret, while the source stays private. Publishing
-the code is a different decision and has not been taken.
+Bump all four version places together: `pyproject.toml`,
+`src/carpaccio/__init__.py`, and `version` and `appVersion` in
+`charts/carpaccio/Chart.yaml` (`appVersion` keeps the `v`, because it is the
+image tag the chart pulls when none is set). The chart job fails if Chart.yaml
+does not match the tag.
+
+**A GHCR package is public only once someone says so, in the web UI.** Making
+the repository public does not change it, and there is no API for it on a
+personal account. Nodes pull the image and Argo CD reads the chart with no
+login, so both packages (`carpaccio` and `charts/carpaccio`) must be public.
 
 Pin by digest in whatever deploys it — the workflow prints the exact line in
 its run summary. A tag can be moved; a digest cannot, so what runs is what was

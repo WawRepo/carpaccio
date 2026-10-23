@@ -158,3 +158,51 @@ jobs:
             gh release create "$V" --title "$V" --notes-file "$notes" \
               --generate-notes --latest
           fi
+
+  chart:
+    # The chart ships with the image, at the same version, to the same
+    # registry, as KaBOM's does (HOME-627). The homelab's Argo CD installs it
+    # from ghcr.io/wawrepo/charts with no login, so the chart PACKAGE must be
+    # public as well - the same web-UI-only switch as the image's, above.
+    needs: [image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: azure/setup-helm@v4
+
+      - name: Package and push the chart
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -eu
+          # Chart.yaml must say the same release as the tag: version without
+          # the v, appVersion with it, because appVersion is the image tag the
+          # chart pulls when none is set.
+          version="${TAG#v}"
+          chart_version=$(helm show chart charts/carpaccio | awk '/^version:/{print $2}')
+          app_version=$(helm show chart charts/carpaccio | awk '/^appVersion:/{gsub(/"/, "", $2); print $2}')
+          if [ "$chart_version" != "$version" ] || [ "$app_version" != "$TAG" ]; then
+            echo "::error::Chart.yaml says version $chart_version, appVersion $app_version; the tag is $TAG"
+            exit 1
+          fi
+
+          helm package charts/carpaccio --destination dist
+          echo "$GHCR_TOKEN" | helm registry login ghcr.io \
+            --username "${{ github.actor }}" --password-stdin
+          # OCI names must be lowercase; the owner is "WawRepo".
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          helm push "dist/carpaccio-${version}.tgz" "oci://ghcr.io/${owner}/charts"
+
+      # The image job cut the release, so the chart can join it.
+      - name: Attach the chart to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: gh release upload "$TAG" "dist/carpaccio-${TAG#v}.tgz" --clobber
