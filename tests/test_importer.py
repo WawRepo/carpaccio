@@ -426,3 +426,212 @@ def test_a_zone_with_no_vlans_keeps_its_own_name():
         )
     )
     assert doc["firewall_rules"][0]["src"] == "External"
+
+
+# ---- re-importing rules (HOME-950) ------------------------------------------
+#
+# The merge used to keep every stored rule and append only (id, name) pairs it
+# had not seen. With 145 zone policies on the controller the store drifted to
+# 151: changed rules kept their old rows, a renamed one sat under both names,
+# deleted ones stayed. And `ports` was always "", which the schema reads as
+# every port.
+
+
+def _policy(pid, name, src=None, dst=None, action="ALLOW"):
+    return {
+        "_id": pid,
+        "name": name,
+        "action": action,
+        "enabled": True,
+        "protocol": "tcp",
+        "source": src or {"zone_id": "z-int", "matching_target": "ANY"},
+        "destination": dst or {"zone_id": "z-iot", "matching_target": "ANY"},
+    }
+
+
+def _hand_written(rule_id, name, **extra):
+    rule = {
+        "id": rule_id,
+        "name": name,
+        "action": "drop",
+        "src": "iot",
+        "dst": "home",
+        "protocol": "any",
+        "ports": "",
+        "enabled": True,
+        "description": "",
+    }
+    rule.update(extra)
+    return rule
+
+
+def test_parse_marks_rules_as_unifi():
+    doc = parse(_raw([_policy("p1", "home_to_iot")]))
+    assert doc["firewall_rules"][0]["source"] == "unifi"
+    assert validation_errors(doc) == []
+
+
+def test_a_changed_rule_is_replaced():
+    """home_to_talos went from Any to network home, ports 6443,50000, and kept
+    its id and name. The old row must not survive beside or instead of it."""
+    stored = parse(_raw([_policy("p1", "home_to_talos")]))
+    changed = _policy(
+        "p1",
+        "home_to_talos",
+        src={"zone_id": "z-int", "matching_target": "NETWORK", "network_ids": ["n-home"]},
+        dst={
+            "zone_id": "z-iot",
+            "matching_target": "ANY",
+            "port_matching_type": "SPECIFIC",
+            "port": "6443,50000",
+        },
+    )
+    merged = merge(stored, parse(_raw([changed])))
+    assert validation_errors(merged) == []
+    assert len(merged["firewall_rules"]) == 1
+    rule = merged["firewall_rules"][0]
+    assert rule["ports"] == "6443,50000"
+    assert rule["src"] == "home, lab (network home)"
+
+
+def test_a_renamed_rule_is_not_duplicated():
+    """UniFi renamed `cluser` to `home_to_iot`: one row, under the new name."""
+    stored = parse(_raw([_policy("p1", "cluser")]))
+    merged = merge(stored, parse(_raw([_policy("p1", "home_to_iot")])))
+    assert [r["name"] for r in merged["firewall_rules"]] == ["home_to_iot"]
+
+
+def test_a_deleted_rule_is_dropped():
+    """Three built-in "Isolated Networks" rules left the controller and stayed
+    in the store. A rule the controller no longer has is gone."""
+    stored = parse(_raw([_policy("p1", "keep"), _policy("p2", "Isolated Networks")]))
+    merged = merge(stored, parse(_raw([_policy("p1", "keep")])))
+    assert [r["id"] for r in merged["firewall_rules"]] == ["p1"]
+
+
+def test_a_hand_written_rule_survives_reimport():
+    """Both kinds: one marked manual, and one stored before `source` existed
+    whose id the controller has never reported. Neither is the controller's
+    to delete. They come after the controller's rules, which are what the
+    gateway enforces and so what the matrix's first match should read."""
+    stored = parse(_raw([_policy("p1", "home_to_iot")]))
+    stored["firewall_rules"].insert(0, _hand_written("manual-1", "planned", source="manual"))
+    stored["firewall_rules"].append(_hand_written("manual-2", "old note"))
+
+    merged = merge(stored, parse(_raw([_policy("p1", "home_to_iot")])))
+    assert validation_errors(merged) == []
+    assert [r["id"] for r in merged["firewall_rules"]] == ["p1", "manual-1", "manual-2"]
+
+    # and a second import changes nothing
+    again = merge(merged, parse(_raw([_policy("p1", "home_to_iot")])))
+    assert [r["id"] for r in again["firewall_rules"]] == ["p1", "manual-1", "manual-2"]
+
+
+def test_a_rule_without_source_is_matched_by_id():
+    """A store written before the field: its imported rows have no `source`.
+    The controller still knows their ids, so they are its rows to replace,
+    and a deleted one with `source: unifi` is no longer kept."""
+    stored = parse(_raw([_policy("p1", "home_to_iot")]))
+    for r in stored["firewall_rules"]:
+        r.pop("source")
+        r["ports"] = "stale"
+    stored["firewall_rules"].append(_hand_written("p9", "gone", source="unifi"))
+
+    merged = merge(stored, parse(_raw([_policy("p1", "home_to_iot")])))
+    assert len(merged["firewall_rules"]) == 1
+    assert merged["firewall_rules"][0]["ports"] == ""
+    assert merged["firewall_rules"][0]["source"] == "unifi"
+
+
+def test_ports_are_recorded():
+    """Empty means every port, so it is only ever written for ANY."""
+    doc = parse(
+        _raw(
+            [
+                _policy(
+                    "p1",
+                    "iot_to_gateway_basics",
+                    dst={
+                        "zone_id": "z-ext",
+                        "matching_target": "ANY",
+                        "port_matching_type": "SPECIFIC",
+                        "port": "53,67,123",
+                    },
+                ),
+                _policy("p2", "Block All Traffic", action="BLOCK"),
+                # The "(Return)" half of an allow rule matches the SOURCE port.
+                _policy(
+                    "p3",
+                    "iot_to_pihole_dns (Return)",
+                    src={
+                        "zone_id": "z-int",
+                        "matching_target": "IP",
+                        "ips": ["192.0.2.218"],
+                        "port_matching_type": "SPECIFIC",
+                        "port": "53",
+                    },
+                ),
+                # A port group, or anything else that is not ANY: never empty.
+                _policy(
+                    "p4",
+                    "grouped",
+                    dst={
+                        "zone_id": "z-iot",
+                        "matching_target": "ANY",
+                        "port_matching_type": "OBJECT",
+                        "port_group_id": "g-web",
+                    },
+                ),
+                _policy(
+                    "p5",
+                    "all but ssh",
+                    dst={
+                        "zone_id": "z-iot",
+                        "matching_target": "ANY",
+                        "port_matching_type": "SPECIFIC",
+                        "port": "22",
+                        "match_opposite_ports": True,
+                    },
+                ),
+            ]
+        )
+    )
+    by_name = {r["name"]: r for r in doc["firewall_rules"]}
+    assert by_name["iot_to_gateway_basics"]["ports"] == "53,67,123"
+    assert by_name["Block All Traffic"]["ports"] == ""
+    assert by_name["iot_to_pihole_dns (Return)"]["ports"] == ""
+    assert by_name["iot_to_pihole_dns (Return)"]["description"] == "source port 53"
+    assert by_name["grouped"]["ports"] == "g-web"
+    assert by_name["all but ssh"]["ports"] == "not 22"
+    assert validation_errors(doc) == []
+
+
+def test_a_network_target_is_named():
+    """`home (693d6285743b520e6e124f19)` was true and told nobody anything."""
+    doc = parse(
+        _raw(
+            [
+                _policy(
+                    "p1",
+                    "home_to_talos",
+                    src={
+                        "zone_id": "z-int",
+                        "matching_target": "NETWORK",
+                        "network_ids": ["n-home"],
+                    },
+                ),
+                _policy(
+                    "p2",
+                    "unknown network",
+                    src={
+                        "zone_id": "z-int",
+                        "matching_target": "NETWORK",
+                        "network_ids": ["n-gone"],
+                    },
+                ),
+            ]
+        )
+    )
+    assert doc["firewall_rules"][0]["src"] == "home, lab (network home)"
+    # An id networkconf does not know is shown as the id, never dropped.
+    assert doc["firewall_rules"][1]["src"] == "home, lab (network n-gone)"

@@ -271,13 +271,20 @@
           },
           "ports": {
             "type": "string",
-            "description": "e.g. '443' or '8000-8100', empty = all"
+            "description": "Destination ports, e.g. '443', '53,67,123' or '8000-8100'; empty = all. A rule that matches on source ports (UniFi's '(Return)' rules) says so in its description."
           },
           "enabled": {
             "type": "boolean"
           },
           "description": {
             "type": "string"
+          },
+          "source": {
+            "enum": [
+              "unifi",
+              "manual"
+            ],
+            "description": "Where this rule came from. 'unifi' rules are REPLACED on every import, and dropped when the controller no longer has them, so an edit to one here lasts only until the next import. 'manual' rules are typed in here and never touched by an import. Absent (rules stored before this field existed) is read as 'unifi' when the controller reports the rule's id, and as hand-written otherwise."
           }
         }
       }

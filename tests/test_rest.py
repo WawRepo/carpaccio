@@ -159,10 +159,15 @@ def test_firewall_rule_crud(client, unifi_raw):
     assert created.status_code == 200, created.text
     rule_id = created.json()["firewall_rule"]["id"]
     assert rule_id.startswith("manual-")  # minted server-side when absent
+    # Only the importer mints 'unifi' rules: the next import drops those.
+    assert created.json()["firewall_rule"]["source"] == "manual"
 
-    patched = client.patch(f"/api/firewall_rules/{rule_id}", json={"action": "reject"})
+    patched = client.patch(
+        f"/api/firewall_rules/{rule_id}", json={"action": "reject", "source": "unifi"}
+    )
     assert patched.status_code == 200
     assert patched.json()["firewall_rule"]["action"] == "reject"
+    assert patched.json()["firewall_rule"]["source"] == "manual"
 
     assert client.delete(f"/api/firewall_rules/{rule_id}").status_code == 200
     assert client.delete(f"/api/firewall_rules/{rule_id}").status_code == 404

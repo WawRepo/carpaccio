@@ -655,6 +655,9 @@ def create_app(store: Store | None = None) -> FastAPI:
             if any(r.get("id") == rule_id for r in doc["firewall_rules"]):
                 return JSONResponse({"detail": f"rule {rule_id!r} already exists"}, status_code=409)
             payload["id"] = rule_id
+            # Same rule as POST /api/vlans: only the importer mints 'unifi'
+            # rules, because the next import replaces or DROPS every one.
+            payload["source"] = "manual"
             doc["firewall_rules"].append(payload)
             return {"firewall_rule": payload}
 
@@ -669,6 +672,7 @@ def create_app(store: Store | None = None) -> FastAPI:
             if rule is None:
                 return _not_found(f"no firewall rule {rule_id!r}")
             payload.pop("id", None)  # the id is the key; rename by delete+create
+            payload.pop("source", None)  # not editable either, same as a VLAN's
             rule.update(payload)
             return {"firewall_rule": rule}
 

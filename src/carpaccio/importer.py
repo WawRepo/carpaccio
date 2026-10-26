@@ -77,8 +77,8 @@ class UniFiClient:
 # believe the whole home VLAN can reach the cameras, and be wrong. So a
 # range-scoped endpoint keeps the zone name AND the qualifier, and the rule
 # reads "Internal (192.168.1.213-254)" rather than pretending to be simple.
-def _zone_lookup(raw: dict) -> tuple[dict, dict]:
-    """zone id -> name, and zone id -> the VLAN names inside it."""
+def _zone_lookup(raw: dict) -> tuple[dict, dict, dict]:
+    """zone id -> name, zone id -> the VLAN names inside it, and network id -> name."""
     zones = raw.get("firewall_zones") or []
     names = {}
     vlans = {}
@@ -89,10 +89,45 @@ def _zone_lookup(raw: dict) -> tuple[dict, dict]:
             continue
         names[zid] = z.get("name", zid)
         vlans[zid] = [networks[i] for i in (z.get("network_ids") or []) if i in networks]
-    return names, vlans
+    return names, vlans, networks
 
 
-def _endpoint_name(ep: dict | None, zone_names: dict, vlan_by_zone: dict) -> str:
+def _ports(ep: dict | None) -> str:
+    """The ports one side of a policy matches, in the schema's words.
+
+    EMPTY MEANS EVERY PORT in the schema, so empty is only ever written for
+    ANY. Until HOME-950 this was hard-coded to "", and a rule that let iot
+    reach the gateway on 53, 67 and 123 read as iot reaching every port on it.
+    SPECIFIC carries the list in `port` ("53,67,123"). Any other type - a port
+    group, something a later UniFi adds - keeps whatever names it rather than
+    falling back to empty: the same "never call it any" rule as
+    _endpoint_name below.
+    """
+    if not ep:
+        return ""
+    kind = str(ep.get("port_matching_type", "ANY")).upper()
+    if kind in ("ANY", ""):
+        return ""
+    ports = str(ep.get("port") or ep.get("port_group_id") or kind)
+    return f"not {ports}" if ep.get("match_opposite_ports") else ports
+
+
+def _description(p: dict) -> str:
+    """The policy's own description, plus its SOURCE ports when it has any.
+
+    A rule has one `ports` field and it means the destination. The "(Return)"
+    rules UniFi makes for an allow rule match on the source port instead -
+    home_to_talos (Return) answers FROM 6443 and 50000 - so those go here, in
+    words, rather than being lost or put in a field that means the other end.
+    """
+    text = p.get("description") or ""
+    src_ports = _ports(p.get("source"))
+    if src_ports:
+        text = f"{text} source port {src_ports}" if text else f"source port {src_ports}"
+    return text
+
+
+def _endpoint_name(ep: dict | None, zone_names: dict, vlan_by_zone: dict, networks: dict) -> str:
     """What one side of a policy actually matches, in words.
 
     Falls back to the zone id rather than to "any": an unknown zone is a thing
@@ -121,7 +156,13 @@ def _endpoint_name(ep: dict | None, zone_names: dict, vlan_by_zone: dict) -> str
         label = ", ".join(sorted(members))
 
     target = str(ep.get("matching_target", "ANY")).upper()
-    if target not in ("ANY", ""):
+    if target == "NETWORK" and ep.get("network_ids"):
+        # By name, the way the rest of the document names a VLAN: a raw id
+        # ("home (693d6285743b520e6e124f19)") is true and tells nobody
+        # anything. An id networkconf does not know stays as the id.
+        named = ", ".join(networks.get(i, i) for i in ep["network_ids"])
+        label = f"{label} (network {named})"
+    elif target not in ("ANY", ""):
         detail = (
             ep.get("ips")
             or ep.get("ip_group_id")
@@ -230,7 +271,7 @@ def parse(raw: dict) -> dict:
         for d in raw["device"]
     ]
 
-    zone_names, vlan_by_zone = _zone_lookup(raw)
+    zone_names, vlan_by_zone, network_names = _zone_lookup(raw)
 
     firewall_rules = [
         {
@@ -239,12 +280,13 @@ def parse(raw: dict) -> dict:
             "action": {"ALLOW": "allow", "BLOCK": "drop", "REJECT": "reject"}.get(
                 str(p.get("action", "")).upper(), "drop"
             ),
-            "src": _endpoint_name(p.get("source"), zone_names, vlan_by_zone),
-            "dst": _endpoint_name(p.get("destination"), zone_names, vlan_by_zone),
+            "src": _endpoint_name(p.get("source"), zone_names, vlan_by_zone, network_names),
+            "dst": _endpoint_name(p.get("destination"), zone_names, vlan_by_zone, network_names),
             "protocol": p.get("protocol", "any"),
-            "ports": "",
+            "ports": _ports(p.get("destination")),
             "enabled": bool(p.get("enabled", True)),
-            "description": p.get("description") or "",
+            "description": _description(p),
+            "source": "unifi",
         }
         for p in raw["firewall_policies"]
     ]
@@ -280,9 +322,7 @@ def merge(existing: dict, imported: dict) -> dict:
         "infrastructure": _merge_by(
             existing["infrastructure"], imported["infrastructure"], "mac", track_rename=True
         ),
-        # UniFi has zero rules today, so rules are primarily hand-written:
-        # keep every existing rule, append imported ones not already present.
-        "firewall_rules": list(existing["firewall_rules"]),
+        "firewall_rules": _merge_rules(existing["firewall_rules"], imported["firewall_rules"]),
         # Reserved addresses are hand-written by definition — a VIP or a
         # load-balancer pool is exactly what no controller can report. An
         # import must never drop them, or the gap they exist to close reopens
@@ -310,12 +350,40 @@ def merge(existing: dict, imported: dict) -> dict:
         seen.add(imp["mac"])
     # Devices the controller has never heard of (hand-added statics) survive.
     merged["devices"].extend(d for m, d in existing_devices.items() if m not in seen)
-
-    known_rules = {(r.get("id"), r["name"]) for r in merged["firewall_rules"]}
-    merged["firewall_rules"].extend(
-        r for r in imported["firewall_rules"] if (r.get("id"), r["name"]) not in known_rules
-    )
     return merged
+
+
+def _merge_rules(existing: list, imported: list) -> list:
+    """Firewall rules, split into the controller's and the human's like VLANs.
+
+    The controller's rules are REPLACED on every import, and dropped when the
+    controller no longer has them. Until HOME-950 the merge kept every stored
+    rule and appended only (id, name) pairs it had not seen, on the theory
+    that UniFi had no rules and these were all hand-written. With 145 zone
+    policies that went wrong three ways: a changed rule kept its old row, a
+    renamed one appeared under both names, and a deleted one stayed for ever.
+    The store read 151 rules against the controller's 145, and the matrix
+    answered from the stale ones.
+
+    A rule is the controller's when it says `source: unifi`, or when it has no
+    `source` (stored before the field existed) and its id is one the
+    controller reports. Everything else is hand-written and survives. An
+    unknown id with no `source` is KEPT, not dropped: deleting a note somebody
+    wrote is the mistake that cannot be seen afterwards.
+
+    The controller's rules come first and in its order, because the matrix
+    shows the FIRST matching rule and the controller's are what the gateway
+    enforces. A hand-written rule then speaks only where the controller says
+    nothing.
+    """
+    controller_ids = {r["id"] for r in imported}
+
+    def from_controller(rule: dict) -> bool:
+        if "source" in rule:
+            return rule["source"] == "unifi"
+        return rule.get("id") in controller_ids
+
+    return list(imported) + [r for r in existing if not from_controller(r)]
 
 
 def _merge_wans(existing: list, imported: list) -> list:

@@ -1145,6 +1145,7 @@ function addRule(src, dst) {
     ports: "",
     enabled: true,
     description: "",
+    source: "manual", // so the next import keeps it: see _merge_rules
   };
   doc.firewall_rules.push(rule);
   if (hooks.firewall) {

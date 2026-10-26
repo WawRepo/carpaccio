@@ -110,6 +110,13 @@ uv run carpaccio-import --dry-run  # prints the parsed document instead
 It is read-only against the controller and merges on MAC, so notes, names and
 hand-added entries survive every re-import.
 
+Firewall rules work differently, because the controller is the firewall. Each
+import **replaces** the controller's rules (zone policies, with their
+destination ports, and network targets by name) and **drops** the ones the
+controller no longer has. A rule you add here is marked `source: manual` and no
+import touches it. An edit to an imported rule lasts only until the next import,
+so make that change on the controller instead.
+
 **Running something else?** You do not need an importer. Point your agent at
 it (step 3). If you want one anyway, write something that produces a document
 matching `GET /api/schema` and merge it. One wart to know about: the schema's
